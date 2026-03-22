@@ -12,6 +12,7 @@
 #include "app_state.h"
 #include "config.h"
 #include "ui_theme.h"
+#include "lawnbot_images.h"
 
 /* Forward from ui.cpp */
 void ui_return_to_dash();
@@ -173,6 +174,11 @@ void ui_schedule_build() {
     lv_obj_set_style_text_color(g_sched_title, lv_color_hex(C_TEXT), 0);
     lv_obj_set_style_text_letter_space(g_sched_title, 2, 0);
     lv_obj_align(g_sched_title, LV_ALIGN_TOP_MID, 0, 20);
+
+    /* Robot icon next to title */
+    lv_obj_t *robot = lv_img_create(g_sched_scr);
+    lv_img_set_src(robot, &img_robot_32);
+    lv_obj_align(robot, LV_ALIGN_TOP_MID, -148, 12);
 
     g_save_btn = lv_btn_create(g_sched_scr);
     lv_obj_set_size(g_save_btn, 100, 44);

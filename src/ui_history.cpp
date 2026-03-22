@@ -12,6 +12,7 @@
 #include "app_state.h"
 #include "config.h"
 #include "ui_theme.h"
+#include "lawnbot_images.h"
 
 void ui_return_to_dash();
 
@@ -155,6 +156,11 @@ void ui_history_build() {
     lv_obj_set_style_text_color(title, lv_color_hex(C_TEXT), 0);
     lv_obj_set_style_text_letter_space(title, 2, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+
+    /* Robot icon next to title */
+    lv_obj_t *robot = lv_img_create(g_hist_scr);
+    lv_img_set_src(robot, &img_robot_32);
+    lv_obj_align(robot, LV_ALIGN_TOP_MID, -140, 12);
 
     /* Column headers */
     const char *HDRS[] = {"ZONE", "DATE / TIME", "DURATION", "TYPE"};

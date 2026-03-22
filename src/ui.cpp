@@ -15,6 +15,7 @@
 #include "app_state.h"
 #include "config.h"
 #include "ui_theme.h"
+#include "lawnbot_images.h"
 
 /* Declared in lv_conf.h */
 extern const lv_font_t font_clock_120;
@@ -268,19 +269,24 @@ static void create_background(lv_obj_t *scr) {
 }
 
 static void create_header(lv_obj_t *scr) {
+    /* Robot mascot icon */
+    lv_obj_t *robot = lv_img_create(scr);
+    lv_img_set_src(robot, &img_robot_48);
+    lv_obj_set_pos(robot, 16, 10);
+
     g_brand_lbl = lv_label_create(scr);
     lv_label_set_text(g_brand_lbl, "LAWNBOT");
     lv_obj_set_style_text_font(g_brand_lbl, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(g_brand_lbl, lv_color_hex(C_TEXT), 0);
     lv_obj_set_style_text_letter_space(g_brand_lbl, 3, 0);
-    lv_obj_align(g_brand_lbl, LV_ALIGN_TOP_LEFT, 24, 16);
+    lv_obj_align(g_brand_lbl, LV_ALIGN_TOP_LEFT, 72, 14);
 
     g_sub_lbl = lv_label_create(scr);
     lv_label_set_text(g_sub_lbl, "BOISE STATE EDITION");
     lv_obj_set_style_text_font(g_sub_lbl, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(g_sub_lbl, lv_color_hex(C_ORANGE), 0);
     lv_obj_set_style_text_letter_space(g_sub_lbl, 2, 0);
-    lv_obj_align(g_sub_lbl, LV_ALIGN_TOP_LEFT, 26, 48);
+    lv_obj_align(g_sub_lbl, LV_ALIGN_TOP_LEFT, 74, 46);
 
     g_mode_lbl = lv_label_create(scr);
     lv_label_set_text(g_mode_lbl, "DEMO MODE");
@@ -686,29 +692,30 @@ static void update_controls() {
 ═══════════════════════════════════════════════════════════ */
 void ui_show_splash() {
     g_splash_screen = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(g_splash_screen, lv_color_hex(C_BLUE), 0);
-    lv_obj_set_style_bg_grad_color(g_splash_screen, lv_color_hex(0x0D4AB8u), 0);
+    lv_obj_set_style_bg_color(g_splash_screen, lv_color_hex(0x06182Fu), 0);
+    lv_obj_set_style_bg_grad_color(g_splash_screen, lv_color_hex(C_PANEL), 0);
     lv_obj_set_style_bg_grad_dir(g_splash_screen, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_width(g_splash_screen, 0, 0);
 
-    lv_obj_t *t = lv_label_create(g_splash_screen);
-    lv_label_set_text(t, "LAWNBOT");
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(t, lv_color_hex(C_TEXT), 0);
-    lv_obj_set_style_text_letter_space(t, 5, 0);
-    lv_obj_align(t, LV_ALIGN_CENTER, 0, -34);
+    /* Full brand logo, centered */
+    lv_obj_t *logo = lv_img_create(g_splash_screen);
+    lv_img_set_src(logo, &img_logo_splash);
+    lv_obj_align(logo, LV_ALIGN_CENTER, 0, -18);
 
-    lv_obj_t *s = lv_label_create(g_splash_screen);
-    lv_label_set_text(s, "Boise State Edition");
-    lv_obj_set_style_text_font(s, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s, lv_color_hex(C_ORANGE), 0);
-    lv_obj_align(s, LV_ALIGN_CENTER, 0, 22);
+    /* "Boise State Edition" subtitle */
+    lv_obj_t *sub = lv_label_create(g_splash_screen);
+    lv_label_set_text(sub, "BOISE STATE EDITION");
+    lv_obj_set_style_text_font(sub, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(sub, lv_color_hex(C_ORANGE), 0);
+    lv_obj_set_style_text_letter_space(sub, 3, 0);
+    lv_obj_align(sub, LV_ALIGN_BOTTOM_MID, 0, -28);
 
     lv_scr_load(g_splash_screen);
 }
 
 void ui_set_splash_text(const char *text) {
     if (!g_splash_screen) return;
+    /* child 0 = logo image, child 1 = subtitle label */
     lv_obj_t *s = lv_obj_get_child(g_splash_screen, 1);
     if (s) lv_label_set_text(s, text);
     lv_timer_handler();
