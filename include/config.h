@@ -1,0 +1,38 @@
+#pragma once
+
+/**
+ * LawnBot Display — User Configuration
+ *
+ * Start in DEMO mode to build and use the UI anywhere.
+ * Switch to LIVE mode later when the CrowPanel is on the same local network
+ * as the LawnBot Controller Pi.
+ */
+
+/* ── Application mode ─────────────────────────────────────── */
+#define APP_MODE_DEMO  1
+#define APP_MODE_LIVE  2
+#define APP_MODE       APP_MODE_DEMO
+
+/* ── WiFi ─────────────────────────────────────────────────── */
+#define WIFI_SSID      "Guest"
+#define WIFI_PASSWORD  "Healthy!"
+
+/* ── LawnBot Controller Pi ────────────────────────────────── */
+#define LAWNBOT_HOST   "192.168.1.100"   /* Set to local Pi host/IP when APP_MODE_LIVE */
+#define LAWNBOT_PORT   8000
+#define LAWNBOT_WS_PATH   "/ws"
+#define LAWNBOT_API_BASE  "http://" LAWNBOT_HOST ":8000/api"
+
+/* ── Defaults ──────────────────────────────────────────────── */
+#define DEFAULT_RUN_MINUTES  5    /* Duration when tapping RUN on a zone card */
+
+/* ── Demo mode ─────────────────────────────────────────────── */
+#define DEMO_AUTOCYCLE_SECONDS   20   /* Idle time before auto-starting a demo run */
+#define DEMO_AUTORUN_SECONDS     75   /* Hands-free animated demo run length */
+#define DEMO_START_EPOCH         1711029720UL  /* Thu Mar 21 2024 07:22:00 local-ish demo seed */
+
+/* ── NTP ───────────────────────────────────────────────────── */
+#define NTP_SERVER_1  "pool.ntp.org"
+#define NTP_SERVER_2  "time.google.com"
+#define NTP_GMT_OFFSET_SEC   (-6 * 3600)   /* UTC-6 (CST) — adjust for your timezone */
+#define NTP_DAYLIGHT_OFFSET_SEC  3600       /* +1 hour daylight saving */
