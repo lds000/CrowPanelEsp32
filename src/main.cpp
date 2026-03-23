@@ -371,6 +371,7 @@ static void ws_event(WStype_t type, uint8_t *payload, size_t length) {
 
 static void connect_wifi() {
     Serial.printf("[WiFi] Connecting to %s\n", WIFI_SSID);
+    Serial0.printf("[WiFi] Connecting to %s\n", WIFI_SSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     int attempts = 0;
@@ -379,8 +380,13 @@ static void connect_wifi() {
     }
     g_state.wifi_connected = (WiFi.status() == WL_CONNECTED);
     ui_set_splash_text(g_state.wifi_connected ? "WiFi connected" : "WiFi failed");
-    if (g_state.wifi_connected)
+    if (g_state.wifi_connected) {
         Serial.printf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial0.printf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+    } else {
+        Serial.println("[WiFi] Connection failed");
+        Serial0.println("[WiFi] Connection failed");
+    }
 }
 
 static void sync_ntp() {
