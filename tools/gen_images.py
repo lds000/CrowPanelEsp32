@@ -115,6 +115,7 @@ def to_lvgl_c(img_rgba, var_name, target_w, target_h):
 IMAGES = [
     # (source filename,                       var_name,          w,   h  )
     ("f01f9637-8c40-49f0-8bf0-d9b28ede5af8.png", "img_logo_splash", 360, 278),
+    ("LawnBot_title_v2.png",                     "img_title_header", 280, 52),
     ("LawnBot_robot_v2.png",                     "img_robot_48",    48,  48 ),
     ("LawnBot_robot_v2.png",                     "img_robot_32",    32,  32 ),
 ]
@@ -197,16 +198,17 @@ for y in range(72):
 robot = previews["img_robot_48"].convert("RGBA")
 dash.paste(robot, (16, 10), robot)
 
+title = previews["img_title_header"].convert("RGBA")
+dash.paste(title, (72, 10), title)
+
 try:
-    f24 = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 24)
     f12 = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 12)
     f14 = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 14)
 except:
-    f24 = f12 = f14 = ImageFont.load_default()
+    f12 = f14 = ImageFont.load_default()
 
-dd.text((72, 14), "LAWNBOT",            font=f24, fill=(248,251,255))
-dd.text((74, 46), "BOISE STATE EDITION",font=f12, fill=(241, 99, 34))
-dd.text((W-24, 36), "DEMO MODE",        font=f14, fill=(197,210,227), anchor="rm")
+dd.text((74, 66), "BOISE STATE EDITION", font=f12, fill=(241, 99, 34))
+dd.text((W-24, 36), "DEMO MODE", font=f14, fill=(197, 210, 227), anchor="rm")
 
 out_hdr = os.path.join(PROJ, "tools", "preview_header.png")
 dash.save(out_hdr)

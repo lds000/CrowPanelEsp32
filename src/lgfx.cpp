@@ -174,3 +174,7 @@ void LGFX::setup() {
     indev_drv.read_cb = touch_read_cb;
     lv_indev_drv_register(&indev_drv);
 }
+
+const uint16_t *LGFX::frameBuffer565() {
+    return reinterpret_cast<const uint16_t *>(_bus_instance.getDMABuffer(0));
+}

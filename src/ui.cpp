@@ -8,6 +8,7 @@
  */
 
 #include <lvgl.h>
+#include <Arduino.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -25,6 +26,7 @@ void ui_schedule_build();
 void ui_schedule_refresh();
 void ui_history_build();
 void ui_history_refresh();
+void ui_show_toast(const char *text, uint32_t ms);
 
 /* ═══════════════════════════════════════════════════════════
    ENUMS / HELPERS
@@ -152,7 +154,7 @@ static lv_obj_t *g_rain1, *g_rain2, *g_rain3, *g_rain4;
 static lv_obj_t *g_wind1, *g_wind2, *g_wind3, *g_bg_dim;
 
 /* Header */
-static lv_obj_t *g_brand_lbl, *g_sub_lbl, *g_mode_lbl;
+static lv_obj_t *g_brand_img, *g_sub_lbl, *g_mode_lbl;
 
 /* Idle content */
 static lv_obj_t *g_idle_grp, *g_idle_time, *g_idle_date;
@@ -164,9 +166,16 @@ static lv_obj_t *g_act_grp, *g_act_zone, *g_act_count, *g_act_sub, *g_act_bar;
 /* Controls bar (130 px at bottom) */
 #define CTRL_H 130
 static lv_obj_t *g_ctrl_grp, *g_hint_lbl, *g_stop_btn, *g_stop_lbl;
-static lv_obj_t *g_hist_btn,  *g_sched_btn;
+static lv_obj_t *g_hist_btn,  *g_sched_btn, *g_snap_btn;
+static lv_obj_t *g_snap_lbl = nullptr;
+static bool      g_snap_busy = false;
 struct ZoneChip { lv_obj_t *btn; lv_obj_t *lbl; };
 static ZoneChip g_chips[3];
+
+/* Toast */
+static lv_obj_t *g_toast = nullptr;
+static lv_obj_t *g_toast_lbl = nullptr;
+static uint32_t  g_toast_hide_at = 0;
 
 /* Duration picker modal */
 static lv_obj_t *g_picker_panel = nullptr;
@@ -231,6 +240,15 @@ static void on_schedule_btn(lv_event_t * /*e*/) {
     ui_schedule_build();
 }
 
+static void on_snap_btn(lv_event_t * /*e*/) {
+    if (g_snap_busy || g_pending.type != PENDING_NONE) return;
+    g_snap_busy = true;
+    if (g_snap_btn) lv_obj_add_state(g_snap_btn, LV_STATE_DISABLED);
+    if (g_snap_lbl) lv_label_set_text(g_snap_lbl, "SAVING...");
+    ui_show_toast("SAVING SNAPSHOT TO SD...", 1500);
+    g_pending.type = PENDING_SAVE_SCREENSHOT_SD;
+}
+
 /* ═══════════════════════════════════════════════════════════
    SCENE BUILDERS
 ═══════════════════════════════════════════════════════════ */
@@ -269,24 +287,25 @@ static void create_background(lv_obj_t *scr) {
 }
 
 static void create_header(lv_obj_t *scr) {
-    /* Robot mascot icon */
+    /* Robot mascot moved into the open left-side space and scaled up. */
     lv_obj_t *robot = lv_img_create(scr);
     lv_img_set_src(robot, &img_robot_48);
-    lv_obj_set_pos(robot, 16, 10);
+    lv_img_set_zoom(robot, 416);
+    lv_obj_set_pos(robot, 18, 278);
+    lv_obj_set_style_img_opa(robot, LV_OPA_90, 0);
 
-    g_brand_lbl = lv_label_create(scr);
-    lv_label_set_text(g_brand_lbl, "LAWNBOT");
-    lv_obj_set_style_text_font(g_brand_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(g_brand_lbl, lv_color_hex(C_TEXT), 0);
-    lv_obj_set_style_text_letter_space(g_brand_lbl, 3, 0);
-    lv_obj_align(g_brand_lbl, LV_ALIGN_TOP_LEFT, 72, 14);
+    /* Wordmark floats directly on the background with no boxed panel behind it. */
+    g_brand_img = lv_img_create(scr);
+    lv_img_set_src(g_brand_img, &img_title_header);
+    lv_img_set_zoom(g_brand_img, 300);
+    lv_obj_set_pos(g_brand_img, 82, 10);
 
     g_sub_lbl = lv_label_create(scr);
     lv_label_set_text(g_sub_lbl, "BOISE STATE EDITION");
     lv_obj_set_style_text_font(g_sub_lbl, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(g_sub_lbl, lv_color_hex(C_ORANGE), 0);
     lv_obj_set_style_text_letter_space(g_sub_lbl, 2, 0);
-    lv_obj_align(g_sub_lbl, LV_ALIGN_TOP_LEFT, 74, 46);
+    lv_obj_align_to(g_sub_lbl, g_brand_img, LV_ALIGN_OUT_BOTTOM_LEFT, 8, -2);
 
     g_mode_lbl = lv_label_create(scr);
     lv_label_set_text(g_mode_lbl, "DEMO MODE");
@@ -498,6 +517,47 @@ static void create_controls_group(lv_obj_t *scr) {
     lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(sl, lv_color_hex(C_ORANGE), 0);
     lv_obj_center(sl);
+}
+
+static void create_snap_button(lv_obj_t *scr) {
+    g_snap_btn = lv_btn_create(scr);
+    lv_obj_set_size(g_snap_btn, 168, 42);
+    lv_obj_set_pos(g_snap_btn, 612, 86);
+    lv_obj_set_style_bg_color(g_snap_btn, lv_color_hex(0x14345Eu), 0);
+    lv_obj_set_style_bg_opa(g_snap_btn, LV_OPA_90, 0);
+    lv_obj_set_style_border_color(g_snap_btn, lv_color_hex(C_ORANGE), 0);
+    lv_obj_set_style_border_width(g_snap_btn, 2, 0);
+    lv_obj_set_style_radius(g_snap_btn, 16, 0);
+    lv_obj_add_flag(g_snap_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(g_snap_btn, on_snap_btn, LV_EVENT_CLICKED, nullptr);
+
+    g_snap_lbl = lv_label_create(g_snap_btn);
+    lv_label_set_text(g_snap_lbl, "SAVE SNAP");
+    lv_obj_set_style_text_font(g_snap_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(g_snap_lbl, lv_color_hex(C_TEXT), 0);
+    lv_obj_center(g_snap_lbl);
+}
+
+static void create_toast(lv_obj_t *scr) {
+    g_toast = lv_obj_create(scr);
+    lv_obj_set_size(g_toast, 440, 42);
+    lv_obj_align(g_toast, LV_ALIGN_TOP_MID, 0, 88);
+    lv_obj_set_style_bg_color(g_toast, lv_color_hex(0x081628u), 0);
+    lv_obj_set_style_bg_opa(g_toast, LV_OPA_90, 0);
+    lv_obj_set_style_border_color(g_toast, lv_color_hex(C_PANEL_EDGE), 0);
+    lv_obj_set_style_border_width(g_toast, 1, 0);
+    lv_obj_set_style_radius(g_toast, 16, 0);
+    lv_obj_set_style_pad_all(g_toast, 8, 0);
+    lv_obj_clear_flag(g_toast, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_toast, LV_OBJ_FLAG_HIDDEN);
+
+    g_toast_lbl = lv_label_create(g_toast);
+    lv_obj_set_width(g_toast_lbl, 408);
+    lv_label_set_long_mode(g_toast_lbl, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_align(g_toast_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(g_toast_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(g_toast_lbl, lv_color_hex(C_TEXT), 0);
+    lv_obj_center(g_toast_lbl);
 }
 
 /* Duration picker modal — overlay panel, initially hidden */
@@ -732,10 +792,13 @@ void ui_build_dashboard() {
 
     create_background(g_dash_screen);
     create_header(g_dash_screen);
+    create_snap_button(g_dash_screen);
     create_idle_group(g_dash_screen);
     create_active_group(g_dash_screen);
     create_controls_group(g_dash_screen);
     create_duration_picker(g_dash_screen);
+    create_toast(g_dash_screen);
+    if (g_snap_btn) lv_obj_move_foreground(g_snap_btn);
 
     update_background();
     update_header();
@@ -750,6 +813,31 @@ void ui_return_to_dash() {
     g_state.active_screen = 0;
     if (g_dash_screen)
         lv_scr_load_anim(g_dash_screen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 300, 0, false);
+}
+
+void ui_show_toast(const char *text, uint32_t ms) {
+    if (!g_toast || !g_toast_lbl) return;
+    lv_label_set_text(g_toast_lbl, text ? text : "");
+    lv_obj_clear_flag(g_toast, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(g_toast);
+    g_toast_hide_at = millis() + ms;
+}
+
+void ui_set_snap_busy(bool busy) {
+    g_snap_busy = busy;
+    if (!g_snap_btn || !g_snap_lbl) return;
+    if (busy) {
+        lv_obj_add_state(g_snap_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_snap_btn, lv_color_hex(0x51637Au), 0);
+        lv_obj_set_style_border_color(g_snap_btn, lv_color_hex(0x9DB1C8u), 0);
+        lv_label_set_text(g_snap_lbl, "SAVING...");
+    } else {
+        lv_obj_clear_state(g_snap_btn, LV_STATE_DISABLED);
+        lv_obj_set_style_bg_color(g_snap_btn, lv_color_hex(0x14345Eu), 0);
+        lv_obj_set_style_border_color(g_snap_btn, lv_color_hex(C_ORANGE), 0);
+        lv_label_set_text(g_snap_lbl, "SAVE SNAP");
+    }
+    lv_obj_center(g_snap_lbl);
 }
 
 void ui_update_timer_cb(lv_timer_t * /*t*/) {
@@ -792,6 +880,12 @@ void ui_update_timer_cb(lv_timer_t * /*t*/) {
     if (idle_chg) update_idle_group();
     if (act_chg)  update_active_group();
     if (ctrl_chg) update_controls();
+
+    if (g_toast && !(lv_obj_has_flag(g_toast, LV_OBJ_FLAG_HIDDEN)) &&
+        g_toast_hide_at && millis() >= g_toast_hide_at) {
+        lv_obj_add_flag(g_toast, LV_OBJ_FLAG_HIDDEN);
+        g_toast_hide_at = 0;
+    }
 
     prev     = g_state;
     has_prev = true;

@@ -12,3 +12,7 @@ Thumbs.db
 # Editor
 .vscode/
 *.swp
+
+# Pulled from device (see tools/fetch_screenshot.py)
+tools/device_capture.bmp
+tools/review_sessions/

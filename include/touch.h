@@ -39,8 +39,9 @@ inline bool touch_has_signal() {
 inline bool touch_touched() {
     ts.read();
     if (ts.isTouched) {
-        touch_last_x = map(ts.points[0].x, 0, TOUCH_MAP_X_MAX, 0, lcd.width() - 1);
-        touch_last_y = map(ts.points[0].y, 0, TOUCH_MAP_Y_MAX, 0, lcd.height() - 1);
+        touch_last_x = (lcd.width() - 1) -
+                       map(ts.points[0].x, 0, TOUCH_MAP_X_MAX, 0, lcd.width() - 1);
+        touch_last_y = map(ts.points[0].y, 0, TOUCH_MAP_Y_MAX, lcd.height() - 1, 0);
         return true;
     }
     return false;

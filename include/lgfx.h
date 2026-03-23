@@ -35,6 +35,7 @@ private:
 public:
     LGFX(void);
     void setup();
+    const uint16_t *frameBuffer565();
 };
 
 extern LGFX lcd;

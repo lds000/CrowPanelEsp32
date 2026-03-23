@@ -3,5 +3,6 @@
 #include "lvgl.h"
 
 LV_IMG_DECLARE(img_logo_splash);
+LV_IMG_DECLARE(img_title_header);
 LV_IMG_DECLARE(img_robot_48);
 LV_IMG_DECLARE(img_robot_32);

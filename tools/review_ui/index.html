@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CrowPanel Review UI</title>
+  <link rel="stylesheet" href="./styles.css?v=6">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <h1>CrowPanel Review UI</h1>
+      <p class="subtle">Import a screenshot or photo, annotate it, then copy a chat-ready payload back into this conversation.</p>
+
+      <section class="card">
+        <h2>Import</h2>
+        <div class="button-row">
+          <button id="importPhotoBtn">Import Screenshot</button>
+          <button id="downloadSourceBtn" class="secondary">Download Source</button>
+        </div>
+        <p id="captureStatus" class="status-line">No screenshot imported yet.</p>
+        <p id="sessionStatus" class="status-line"></p>
+        <input id="photoInput" type="file" accept="image/*,.bmp,.png,.jpg,.jpeg,.webp" hidden>
+      </section>
+
+      <section class="card">
+        <h2>Annotate</h2>
+        <div class="tool-grid">
+          <button id="toolSelectBtn" class="tool-button active">Select</button>
+          <button id="toolPenBtn" class="tool-button">Pen</button>
+          <button id="toolRectBtn" class="tool-button">Rect</button>
+          <button id="toolArrowBtn" class="tool-button">Arrow</button>
+        </div>
+        <label class="field">
+          <span>Annotation Color</span>
+          <input id="colorInput" type="color" value="#ff5a36">
+        </label>
+        <label class="field">
+          <span>Stroke Width</span>
+          <input id="sizeInput" type="range" min="2" max="14" value="4">
+        </label>
+        <div class="button-row">
+          <button id="undoBtn" class="secondary">Undo</button>
+          <button id="clearBtn" class="secondary">Clear Markup</button>
+          <button id="downloadPngBtn" class="secondary">Save PNG</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Notes</h2>
+        <label class="field">
+          <span>What should be changed?</span>
+          <textarea id="noteInput" rows="7" placeholder="Example: Replace the plain header text with the gradient title image. The robot looks correct."></textarea>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2>Share Back Here</h2>
+        <div class="button-row">
+          <button id="copyForChatBtn">Copy For Chat</button>
+          <button id="copyNotesBtn" class="secondary">Copy Notes</button>
+          <button id="copyJsonBtn" class="secondary">Copy JSON</button>
+          <button id="saveSessionBtn" class="secondary">Save Session</button>
+          <button id="openSessionsBtn" class="secondary">Open Sessions Folder</button>
+        </div>
+        <p class="subtle">Use <code>Copy For Chat</code>, then paste directly into this chat so I can use your notes and annotations as review instructions.</p>
+      </section>
+
+      <section class="card">
+        <h2>How To Use</h2>
+        <ol class="steps">
+          <li>Open this tool in Chrome or Edge.</li>
+          <li>Click <code>Import Screenshot</code> and choose a saved CrowPanel screenshot or photo.</li>
+          <li>Draw arrows, rectangles, or freehand notes over the screenshot.</li>
+          <li>Write extra notes, then click <code>Copy For Chat</code> or <code>Save Session</code>.</li>
+          <li>Paste the copied block back into this conversation.</li>
+        </ol>
+      </section>
+    </aside>
+
+    <main class="canvas-panel">
+      <div class="canvas-toolbar">
+        <span id="canvasMeta">Canvas: no screenshot loaded</span>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="reviewCanvas" width="800" height="480"></canvas>
+      </div>
+      <div class="log-panel">
+        <h3>Session Log</h3>
+        <pre id="logOutput"></pre>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="./app.js?v=6"></script>
+</body>
+</html>

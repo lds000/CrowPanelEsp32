@@ -36,3 +36,12 @@
 #define NTP_SERVER_2  "time.google.com"
 #define NTP_GMT_OFFSET_SEC   (-6 * 3600)   /* UTC-6 (CST) — adjust for your timezone */
 #define NTP_DAYLIGHT_OFFSET_SEC  3600       /* +1 hour daylight saving */
+
+/* ── Debug: HTTP screen capture (LVGL snapshot → BMP) ─────────
+ * When 1, connects to WIFI_SSID and serves:
+ *   http://<device-ip>:8080/capture.bmp
+ *   http://<device-ip>:8080/          (links to capture)
+ * Set to 0 to save flash / avoid WiFi in demo. */
+/* WiFi HTTP capture — set 1 at home; leave 0 on locked work WiFi (saves boot time). */
+#define ENABLE_SCREENSHOT_HTTP   0
+#define SCREENSHOT_HTTP_PORT     8080

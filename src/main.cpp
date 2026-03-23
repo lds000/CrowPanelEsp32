@@ -23,11 +23,19 @@
 #include "app_state.h"
 #include "lgfx.h"
 
+#if ENABLE_SCREENSHOT_HTTP
+#include "screenshot_server.h"
+#endif
+#include "screenshot_serial.h"
+#include "screenshot_sd.h"
+
 /* ── Forward declarations from UI files ──────────────────── */
 void ui_init();
 void ui_set_splash_text(const char *text);
 void ui_build_dashboard();
 void ui_update_timer_cb(lv_timer_t *t);
+void ui_set_snap_busy(bool busy);
+void ui_show_toast(const char *text, uint32_t ms);
 
 /* ── Global state ─────────────────────────────────────────── */
 AppState      g_state   = {};
@@ -37,6 +45,38 @@ static const char *WIND_DIRS[8] = {"N","NE","E","SE","S","SW","W","NW"};
 
 static uint32_t g_last_clock_ms  = 0;
 static const uint32_t CTRL_WAKE_MS = 8000;
+
+static void start_screenshot_sd_request() {
+    if (screenshot_sd_start_save_latest()) {
+        Serial.println("[SD] Screenshot save started");
+        Serial0.println("[SD] Screenshot save started");
+    } else {
+        Serial.println("[SD] Screenshot save could not start");
+        Serial0.println("[SD] Screenshot save could not start");
+        ui_show_toast("SD SAVE FAILED", 3000);
+        ui_set_snap_busy(false);
+    }
+    g_pending.type = PENDING_NONE;
+}
+
+static void poll_screenshot_sd_result() {
+    bool ok = false;
+    char path[48] = {};
+    if (!screenshot_sd_poll_result(&ok, path, sizeof(path))) return;
+
+    if (ok) {
+        Serial.printf("[SD] Saved screenshot: %s\n", path);
+        Serial0.printf("[SD] Saved screenshot: %s\n", path);
+        char msg[80];
+        snprintf(msg, sizeof(msg), "SAVED TO SD: %s", path);
+        ui_show_toast(msg, 3000);
+    } else {
+        Serial.println("[SD] Screenshot save failed");
+        Serial0.println("[SD] Screenshot save failed");
+        ui_show_toast("SD SAVE FAILED", 3000);
+    }
+    ui_set_snap_busy(false);
+}
 
 #if APP_MODE == APP_MODE_LIVE
 static WebSocketsClient ws;
@@ -546,12 +586,22 @@ static void seed_demo_state() {
 ═══════════════════════════════════════════════════════════ */
 void setup() {
     Serial.begin(115200);
+    /* CH340 USB-UART bridge uses ESP32-S3 UART0 on GPIO44(RX0)/GPIO43(TX0) */
+    Serial0.begin(115200, SERIAL_8N1, 44, 43);
     delay(200);
     Serial.println("\n[Boot] LawnBot CrowPanel Display");
+    Serial0.println("\n[Boot] LawnBot CrowPanel Display");
 
     lcd.setup();
     ui_init();
     lv_timer_handler();
+    if (screenshot_sd_init()) {
+        Serial.println("[SD] TF card ready");
+        Serial0.println("[SD] TF card ready");
+    } else {
+        Serial.println("[SD] TF card not ready");
+        Serial0.println("[SD] TF card not ready");
+    }
 
 #if APP_MODE == APP_MODE_LIVE
     g_state.demo_mode = false;
@@ -598,7 +648,15 @@ void setup() {
     update_demo_state();
 #endif
 
+#if ENABLE_SCREENSHOT_HTTP
+    screenshot_server_init();
+#endif
+
     Serial.println("[Boot] Ready");
+    Serial.println("[Serial] Screen grab over USB: type capture + Enter, or run:");
+    Serial.println("         python tools/fetch_screenshot_serial.py COM3");
+    Serial0.println("[Boot] Ready");
+    Serial0.println("[UART] Screen grab over CH340/UART: send 'capture' + Enter");
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -632,14 +690,24 @@ void loop() {
 
     g_state.controls_visible = (millis() - g_last_touch_ms) < CTRL_WAKE_MS;
     lv_timer_handler();
+    poll_screenshot_sd_result();
 
     if (g_pending.type != PENDING_NONE) {
+        if (g_pending.type == PENDING_SAVE_SCREENSHOT_SD) {
+            start_screenshot_sd_request();
+        } else {
 #if APP_MODE == APP_MODE_LIVE
-        execute_live_action();
+            execute_live_action();
 #else
-        execute_demo_action();
+            execute_demo_action();
 #endif
+        }
     }
+
+#if ENABLE_SCREENSHOT_HTTP
+    screenshot_server_loop();
+#endif
+    screenshot_serial_poll();
 
     delay(5);
 }

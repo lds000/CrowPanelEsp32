@@ -131,5 +131,8 @@
 #define LV_USE_PERF_MONITOR     0
 #define LV_USE_MEM_MONITOR      0
 
+/* Snapshot — used by HTTP /capture.bmp for remote screen grab */
+#define LV_USE_SNAPSHOT         1
+
 #endif /* LV_CONF_H */
 #endif /* #if 1 guard */
