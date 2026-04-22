@@ -37,6 +37,17 @@
 #define NTP_GMT_OFFSET_SEC   (-6 * 3600)   /* UTC-6 (CST) — adjust for your timezone */
 #define NTP_DAYLIGHT_OFFSET_SEC  3600       /* +1 hour daylight saving */
 
+/* ── OTA update server ─────────────────────────────────────────
+ * ArduinoOTA (PlatformIO espota) + HTTP browser upload page.
+ * Active only in LIVE mode after WiFi connects.
+ *   Browser : http://<device-ip>/
+ *   PlatformIO : use env:crowpanel-7inch-ota  (upload_port = 192.168.68.107)
+ * Change OTA_PASSWORD before deploying to a shared network. */
+#define ENABLE_OTA      1
+#define OTA_HOSTNAME    "crowpanel"
+#define OTA_PASSWORD    "lawnbot"
+#define OTA_HTTP_PORT   80
+
 /* ── Debug: HTTP screen capture (LVGL snapshot → BMP) ─────────
  * When 1, connects to WIFI_SSID and serves:
  *   http://<device-ip>:8080/capture.bmp

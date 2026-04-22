@@ -26,6 +26,9 @@
 #if ENABLE_SCREENSHOT_HTTP
 #include "screenshot_server.h"
 #endif
+#if ENABLE_OTA
+#include "ota_server.h"
+#endif
 #include "screenshot_serial.h"
 #include "screenshot_sd.h"
 
@@ -373,6 +376,9 @@ static void connect_wifi() {
     Serial.printf("[WiFi] Connecting to %s\n", WIFI_SSID);
     Serial0.printf("[WiFi] Connecting to %s\n", WIFI_SSID);
     WiFi.mode(WIFI_STA);
+#if ENABLE_OTA
+    WiFi.setHostname(OTA_HOSTNAME);
+#endif
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 40) {
@@ -633,6 +639,11 @@ void setup() {
 
         poll_sensors();
     }
+
+#if ENABLE_OTA
+    if (g_state.wifi_connected) ota_server_init();
+#endif
+
 #else
     ui_set_splash_text("Starting demo mode...");
     seed_demo_state();
@@ -712,6 +723,9 @@ void loop() {
 
 #if ENABLE_SCREENSHOT_HTTP
     screenshot_server_loop();
+#endif
+#if ENABLE_OTA
+    ota_server_loop();
 #endif
     screenshot_serial_poll();
 
