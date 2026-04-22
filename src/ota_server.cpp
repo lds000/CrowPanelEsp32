@@ -181,4 +181,12 @@ void ota_server_loop() {
     if (!g_ota_in_progress) g_ota_http.handleClient();
 }
 
+#else /* not (APP_MODE_LIVE && ENABLE_OTA) */
+
+/* Provide empty stubs so unconditional callers in main.cpp still link
+ * when OTA is compiled out (e.g. in DEMO mode). */
+#include "ota_server.h"
+void ota_server_init() {}
+void ota_server_loop() {}
+
 #endif /* APP_MODE_LIVE && ENABLE_OTA */
