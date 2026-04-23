@@ -43,6 +43,14 @@ static void on_ota_end(bool success) {
 /* ── Public API ──────────────────────────────────────────────────────── */
 
 void ota_server_init() {
+    /* Idempotency guard — loop() re-invokes this on every WiFi reconnect;
+     * re-running ArduinoOTA.begin() / ElegantOTA.begin() / g_ota_http.begin()
+     * can leak handlers or assert on some Arduino-ESP32 versions.
+     * (Originally added in ffd422e, restored after ElegantOTA migration.) */
+    static bool s_initialized = false;
+    if (s_initialized) return;
+    s_initialized = true;
+
     /* ArduinoOTA — used by PlatformIO espota upload */
     ArduinoOTA.setHostname(OTA_HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASSWORD);
