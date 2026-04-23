@@ -45,6 +45,7 @@
  * Change OTA_PASSWORD before deploying to a shared network. */
 #define ENABLE_OTA      1
 #define OTA_HOSTNAME    "crowpanel"
+#define OTA_USERNAME    "admin"
 #define OTA_PASSWORD    "lawnbot"
 #define OTA_HTTP_PORT   80
 
@@ -54,5 +55,5 @@
  *   http://<device-ip>:8080/          (links to capture)
  * Set to 0 to save flash / avoid WiFi in demo. */
 /* WiFi HTTP capture — set 1 at home; leave 0 on locked work WiFi (saves boot time). */
-#define ENABLE_SCREENSHOT_HTTP   0
+#define ENABLE_SCREENSHOT_HTTP   1
 #define SCREENSHOT_HTTP_PORT     8080
