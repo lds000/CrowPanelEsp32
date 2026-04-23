@@ -53,8 +53,10 @@ re-read this section first:
    works regardless. **When in doubt, use HTTP OTA.** See "Common issues"
    §3 for diagnostics.
 
-This project does **not** use ElegantOTA. The OTA stack is `ArduinoOTA` +
-a hand-rolled HTTP `/update` handler in `src/ota_server.cpp`.
+The OTA stack is `ArduinoOTA` (PIO espota) + `ElegantOTA` for the HTTP
+browser path, both wired up in `src/ota_server.cpp`. The HTTP endpoint
+`/update` is served by ElegantOTA and requires HTTP Basic Auth
+`OTA_USERNAME` / `OTA_PASSWORD` (defaults: `admin` / `lawnbot`).
 
 ## Quick reference
 
@@ -62,9 +64,9 @@ a hand-rolled HTTP `/update` handler in `src/ota_server.cpp`.
 |---|---|---|
 | USB serial | `pio run -e crowpanel-7inch --target upload --upload-port COM8` | First-time flash, recovery, or device has no OTA listener yet |
 | ArduinoOTA (PIO espota) | `pio run -e crowpanel-7inch-ota --target upload` | Routine WiFi update from a host on the same LAN with no Tailscale subnet shadow |
-| HTTP browser OTA | `curl.exe -F firmware=@firmware.bin http://192.168.68.107/update` | Routine WiFi update from any host (even with Tailscale interfering); also usable from a phone browser |
+| HTTP browser OTA (ElegantOTA) | `curl.exe -u admin:lawnbot -F firmware=@firmware.bin http://192.168.68.107/update` | Routine WiFi update from any host (even with Tailscale interfering); also usable from a phone browser at `http://192.168.68.107/update` |
 
-Device defaults: `192.168.68.107`, hostname `crowpanel.local`, ArduinoOTA UDP port `3232`, HTTP OTA port `80`, OTA password `lawnbot`.
+Device defaults: `192.168.68.107`, hostname `crowpanel.local`, ArduinoOTA UDP port `3232`, HTTP OTA port `80`, OTA username `admin`, OTA password `lawnbot`.
 
 ## Pre-flight checklist (always run before flashing)
 
@@ -141,12 +143,18 @@ matches `OTA_PASSWORD` in `include/config.h`.
 If this hangs at `Waiting for device...`, see the **Tailscale routing**
 gotcha below — switch to the HTTP path.
 
-### C. HTTP browser upload (most reliable from this Windows host)
+### C. HTTP browser upload via ElegantOTA (most reliable from this Windows host)
 
 ```powershell
-curl.exe -F "firmware=@.pio/build/crowpanel-7inch/firmware.bin" `
+curl.exe -u admin:lawnbot `
+         -F "firmware=@.pio/build/crowpanel-7inch/firmware.bin" `
          http://192.168.68.107/update --max-time 180
 ```
+
+Or from any browser (phone, laptop): navigate to
+`http://192.168.68.107/update`, enter `admin` / `lawnbot` when the basic-auth
+prompt appears, pick the firmware `.bin`, and submit. ElegantOTA streams
+the upload in chunks so memory pressure on the ESP32-S3 is bounded.
 
 Device reboots ~3 seconds after a successful upload.
 
@@ -154,12 +162,23 @@ Device reboots ~3 seconds after a successful upload.
 
 ```powershell
 ping -n 2 192.168.68.107
-$page = (Invoke-WebRequest "http://192.168.68.107/" -TimeoutSec 10 -UseBasicParsing).Content
-[regex]::Matches($page,'<span class=''val''>([^<]+)</span>') | % { $_.Groups[1].Value }
+Test-NetConnection 192.168.68.107 -Port 80 -InformationLevel Quiet
+Test-NetConnection 192.168.68.107 -Port 3232 -InformationLevel Quiet
 ```
 
-Confirm the **Build** timestamp matches `(Get-Item .pio\build\crowpanel-7inch\firmware.bin).LastWriteTime`
-(within a few seconds — the C `__DATE__`/`__TIME__` is when `ota_server.cpp` was compiled).
+Both ports should return `True`. For build-version verification, the
+ElegantOTA HTTP root at `http://192.168.68.107/` redirects to the upload
+page; the precise build timestamp is best read via the serial monitor
+(USB-only) at boot:
+
+```
+[OTA] ArduinoOTA  — crowpanel.local  (port 3232)
+[OTA] Browser OTA — http://192.168.68.107/update
+```
+
+Or, if `ENABLE_SCREENSHOT_HTTP` is `1` (default since commit `8c19648`),
+fetch a fresh screenshot at `http://192.168.68.107:8080/capture.bmp` and
+visually confirm UI changes shipped.
 
 ## Deploying from a different PC (fresh checkout, remote, or hub Pi)
 
@@ -178,8 +197,8 @@ pio run -e crowpanel-7inch                          # build LIVE firmware
 # 3. Upload — pick ONE based on the host's network situation:
 pio run -e crowpanel-7inch --target upload --upload-port COMx   # USB (most reliable)
 pio run -e crowpanel-7inch-ota --target upload                  # ArduinoOTA (if no VPN subnet shadow)
-curl.exe -F "firmware=@.pio/build/crowpanel-7inch/firmware.bin" `
-         http://192.168.68.107/update --max-time 180             # HTTP OTA (works even with Tailscale)
+curl.exe -u admin:lawnbot -F "firmware=@.pio/build/crowpanel-7inch/firmware.bin" `
+         http://192.168.68.107/update --max-time 180             # HTTP OTA via ElegantOTA (works even with Tailscale)
 # 4. Revert the local config edit immediately.
 git checkout -- include/config.h
 ```
@@ -288,8 +307,25 @@ pio device monitor -e crowpanel-7inch -p COM8 -b 115200
 
 The boot-time WiFi window is 60 s (`connect_wifi()` in `src/main.cpp`).
 If it misses that, `loop()` retries WiFi every 10 s and re-invokes
-`ota_server_init()` (idempotent) when WiFi finally comes up — so the device
-self-heals as long as WiFi ever associates.
+`ota_server_init()` when WiFi finally comes up — so the device self-heals
+as long as WiFi ever associates.
+
+> **Regression watch — `ota_server_init` idempotency**
+> Commit `ffd422e` added a `static bool s_initialized` guard so repeated
+> calls (from the WiFi reconnect path in `loop()`) were no-ops. Commit
+> `8c19648` (ElegantOTA migration) inadvertently dropped that guard. If
+> the device ever loses WiFi and reconnects, `ArduinoOTA.begin()`,
+> `ElegantOTA.begin()`, and `g_ota_http.begin()` all re-run, which on
+> some Arduino-ESP32 versions can leak handlers or assert. **If you
+> touch `src/ota_server.cpp`, restore the guard:**
+> ```cpp
+> void ota_server_init() {
+>     static bool s_initialized = false;
+>     if (s_initialized) return;
+>     s_initialized = true;
+>     /* ... */
+> }
+> ```
 
 ### 6. HTTP OTA upload aborts mid-stream with `Recv failure: Connection was reset`
 
@@ -318,7 +354,7 @@ may have crashed into a boot loop. Power-cycle it via the USB cable.
 ## Footgun reminders
 
 - **Never commit `include/config.h` with real credentials.** `git diff include/config.h` before every commit when working on deploy-related code.
-- **Don't push the OTA env to a device whose committed config is DEMO** — the device will boot, fail to find `Guest`/`Healthy!`, and lose its OTA listener until USB recovery.
+- **Don't push the OTA env to a device whose committed config is DEMO** — the device will boot, fail to find the placeholder WiFi (`Guest`/`Healthy!` in `include/config.h`), and lose its OTA listener until USB recovery.
 - **Don't bump LovyanGFX past 1.1.16** until you've also migrated `lv_conf.h` to LVGL 9 — see issue 1.
 - **`pio run --target upload` without `--upload-port`** auto-detects the serial port. Fine when only the CH340 is connected, ambiguous otherwise. Always pass `--upload-port COM8` for USB flashes when other USB-serial devices are plugged in.
 
@@ -330,5 +366,5 @@ may have crashed into a boot loop. Power-cycle it via the USB cable.
 | `include/config.h` | WiFi creds, APP_MODE, OTA password — **secrets**, do not commit edits |
 | `include/lv_conf.h` | LVGL 8.4 config — must match installed LVGL major version |
 | `src/main.cpp` | `connect_wifi()` (60 s window), reconnect loop, `ota_server_init()` re-call |
-| `src/ota_server.cpp` | ArduinoOTA + HTTP `/update` handlers; idempotent init |
+| `src/ota_server.cpp` | ArduinoOTA + ElegantOTA at `/update` (basic auth `admin`/`lawnbot`) |
 | `partitions.csv` | App partition is 3 MB; current build uses ~58% |
