@@ -17,6 +17,9 @@ Tailscale's subnet-routing (which has been flaky from some hosts).
 - `http://<hub-pi>:9108/` — HTML preview with auto-refresh
 - `http://<hub-pi>:9108/capture.bmp` — raw BMP passthrough
 - `http://<hub-pi>:9108/capture.png` — PNG-converted (smaller, browser-native)
+- `http://<hub-pi>:9108/wake-controls` — ask the panel to show its controls bar
+- `http://<hub-pi>:9108/controls.png` — wake controls, fetch fresh capture, return PNG
+- `http://<hub-pi>:9108/controls.bmp` — wake controls, fetch fresh capture, return BMP
 - `http://<hub-pi>:9108/health` — JSON relay + panel status
 
 From the remote PC, use the hub Pi's Tailscale IP (`100.116.147.6`):
@@ -24,6 +27,7 @@ From the remote PC, use the hub Pi's Tailscale IP (`100.116.147.6`):
 ```powershell
 curl -o capture.png http://100.116.147.6:9108/capture.png
 start capture.png
+curl -o controls.png http://100.116.147.6:9108/controls.png
 ```
 
 Or open `http://100.116.147.6:9108/` in a browser with auto-refresh on.

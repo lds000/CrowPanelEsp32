@@ -166,9 +166,7 @@ static lv_obj_t *g_act_grp, *g_act_zone, *g_act_count, *g_act_sub, *g_act_bar;
 /* Controls bar (130 px at bottom) */
 #define CTRL_H 130
 static lv_obj_t *g_ctrl_grp, *g_hint_lbl, *g_stop_btn, *g_stop_lbl;
-static lv_obj_t *g_hist_btn,  *g_sched_btn, *g_snap_btn;
-static lv_obj_t *g_snap_lbl = nullptr;
-static bool      g_snap_busy = false;
+static lv_obj_t *g_hist_btn,  *g_sched_btn;
 struct ZoneChip { lv_obj_t *btn; lv_obj_t *lbl; };
 static ZoneChip g_chips[3];
 
@@ -238,15 +236,6 @@ static void on_schedule_btn(lv_event_t * /*e*/) {
     g_state.active_screen = 1;
     if (!g_state.demo_mode) g_pending.type = PENDING_FETCH_SCHEDULE;
     ui_schedule_build();
-}
-
-static void on_snap_btn(lv_event_t * /*e*/) {
-    if (g_snap_busy || g_pending.type != PENDING_NONE) return;
-    g_snap_busy = true;
-    if (g_snap_btn) lv_obj_add_state(g_snap_btn, LV_STATE_DISABLED);
-    if (g_snap_lbl) lv_label_set_text(g_snap_lbl, "SAVING...");
-    ui_show_toast("SAVING SNAPSHOT TO SD...", 1500);
-    g_pending.type = PENDING_SAVE_SCREENSHOT_SD;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -519,25 +508,6 @@ static void create_controls_group(lv_obj_t *scr) {
     lv_obj_center(sl);
 }
 
-static void create_snap_button(lv_obj_t *scr) {
-    g_snap_btn = lv_btn_create(scr);
-    lv_obj_set_size(g_snap_btn, 168, 42);
-    lv_obj_set_pos(g_snap_btn, 612, 86);
-    lv_obj_set_style_bg_color(g_snap_btn, lv_color_hex(0x14345Eu), 0);
-    lv_obj_set_style_bg_opa(g_snap_btn, LV_OPA_90, 0);
-    lv_obj_set_style_border_color(g_snap_btn, lv_color_hex(C_ORANGE), 0);
-    lv_obj_set_style_border_width(g_snap_btn, 2, 0);
-    lv_obj_set_style_radius(g_snap_btn, 16, 0);
-    lv_obj_add_flag(g_snap_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(g_snap_btn, on_snap_btn, LV_EVENT_CLICKED, nullptr);
-
-    g_snap_lbl = lv_label_create(g_snap_btn);
-    lv_label_set_text(g_snap_lbl, "SAVE SNAP");
-    lv_obj_set_style_text_font(g_snap_lbl, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(g_snap_lbl, lv_color_hex(C_TEXT), 0);
-    lv_obj_center(g_snap_lbl);
-}
-
 static void create_toast(lv_obj_t *scr) {
     g_toast = lv_obj_create(scr);
     lv_obj_set_size(g_toast, 440, 42);
@@ -792,13 +762,11 @@ void ui_build_dashboard() {
 
     create_background(g_dash_screen);
     create_header(g_dash_screen);
-    create_snap_button(g_dash_screen);
     create_idle_group(g_dash_screen);
     create_active_group(g_dash_screen);
     create_controls_group(g_dash_screen);
     create_duration_picker(g_dash_screen);
     create_toast(g_dash_screen);
-    if (g_snap_btn) lv_obj_move_foreground(g_snap_btn);
 
     update_background();
     update_header();
@@ -824,20 +792,7 @@ void ui_show_toast(const char *text, uint32_t ms) {
 }
 
 void ui_set_snap_busy(bool busy) {
-    g_snap_busy = busy;
-    if (!g_snap_btn || !g_snap_lbl) return;
-    if (busy) {
-        lv_obj_add_state(g_snap_btn, LV_STATE_DISABLED);
-        lv_obj_set_style_bg_color(g_snap_btn, lv_color_hex(0x51637Au), 0);
-        lv_obj_set_style_border_color(g_snap_btn, lv_color_hex(0x9DB1C8u), 0);
-        lv_label_set_text(g_snap_lbl, "SAVING...");
-    } else {
-        lv_obj_clear_state(g_snap_btn, LV_STATE_DISABLED);
-        lv_obj_set_style_bg_color(g_snap_btn, lv_color_hex(0x14345Eu), 0);
-        lv_obj_set_style_border_color(g_snap_btn, lv_color_hex(C_ORANGE), 0);
-        lv_label_set_text(g_snap_lbl, "SAVE SNAP");
-    }
-    lv_obj_center(g_snap_lbl);
+    (void)busy;
 }
 
 void ui_update_timer_cb(lv_timer_t * /*t*/) {

@@ -11,6 +11,7 @@
 #include <WiFi.h>
 #include <lvgl.h>
 
+#include "app_state.h"
 #include "screenshot_bmp.h"
 #include "screenshot_server.h"
 
@@ -41,6 +42,12 @@ static void handle_capture() {
     screenshot_bmp_free(bmp);
 }
 
+static void handle_wake_controls() {
+    g_last_touch_ms = millis();
+    g_state.controls_visible = true;
+    g_http->send(200, "text/plain", "controls awake\n");
+}
+
 void screenshot_server_init() {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.printf("[HTTP] Screenshot server: connecting WiFi (%s)...\n", WIFI_SSID);
@@ -68,6 +75,7 @@ void screenshot_server_init() {
     g_http = new WebServer(SCREENSHOT_HTTP_PORT);
     g_http->on("/", HTTP_GET, handle_root);
     g_http->on("/capture.bmp", HTTP_GET, handle_capture);
+    g_http->on("/wake-controls", HTTP_GET, handle_wake_controls);
     g_http->begin();
 }
 

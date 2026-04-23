@@ -16,6 +16,9 @@ Endpoints:
   GET /                        — HTML preview with auto-refresh
   GET /capture.bmp             — cached BMP passthrough
   GET /capture.png             — cached PNG (converted via Pillow)
+  GET /controls.bmp            — wake controls, fetch fresh BMP, return it
+  GET /controls.png            — wake controls, fetch fresh PNG, return it
+  GET /wake-controls           — ask the panel to show its controls bar
   GET /refresh                 — trigger a background refresh (non-blocking)
   GET /refresh?wait=1          — trigger refresh and wait for it to finish
   GET /health                  — JSON status (age of cache, last fetch stats)
@@ -130,6 +133,20 @@ def _fetch_from_panel() -> tuple[bool, str]:
         _fetch_lock.release()
 
 
+def _wake_panel_controls() -> tuple[bool, str]:
+    """Ask the panel to show the transient controls bar."""
+    url = f"http://{PANEL_HOST}:{PANEL_PORT}/wake-controls"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "crowpanel-relay/1.1"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read(200).decode("utf-8", errors="replace").strip()
+            if resp.status != 200:
+                raise RuntimeError(f"panel returned HTTP {resp.status}: {body}")
+        return (True, body or "controls awake")
+    except Exception as e:
+        return (False, str(e))
+
+
 def _background_refresher() -> None:
     """Periodically refresh the cache in the background. Silent warm-up."""
     time.sleep(2.0)
@@ -170,6 +187,7 @@ _INDEX_HTML = """<!DOCTYPE html>
   <div class="row">
     <button onclick="refreshImage()">Reload cached image</button>
     <button id="pullBtn" onclick="pullFresh()">Pull fresh from panel (blocks until done)</button>
+    <button id="controlsBtn" onclick="pullControls()">Show controls + capture</button>
   </div>
   <p id="status">loading...</p>
   <p><img id="shot" src="/capture.png" alt="screenshot"></p>
@@ -209,6 +227,19 @@ async function pullFresh() {
     btn.disabled = false;
     btn.textContent = "Pull fresh from panel (blocks until done)";
     updateStatus();
+  }
+}
+async function pullControls() {
+  const btn = document.getElementById("controlsBtn");
+  btn.disabled = true;
+  btn.textContent = "Waking controls...";
+  try {
+    document.getElementById("shot").src = "/controls.png?t=" + Date.now();
+    await new Promise(resolve => setTimeout(resolve, 2500));
+    updateStatus();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Show controls + capture";
   }
 }
 setInterval(updateStatus, 2000);
@@ -271,6 +302,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ctype = "image/png" if _HAVE_PIL else "image/bmp"
             if not body:
                 self._send(503, b"relay: no cached capture yet (still warming up)\n")
+                return
+            self._send(200, body, ctype)
+            return
+
+        if path in ("/wake-controls", "/controls.bmp", "/controls.png"):
+            ok, msg = _wake_panel_controls()
+            if not ok:
+                self._send(502, ("panel wake failed: " + msg + "\n").encode())
+                return
+            if path == "/wake-controls":
+                self._send(200, (msg + "\n").encode())
+                return
+
+            time.sleep(0.75)
+            ok, msg = _fetch_from_panel()
+            if not ok:
+                self._send(502, ("panel fetch failed: " + msg + "\n").encode())
+                return
+            with _lock:
+                body = _cache_png if path == "/controls.png" and _HAVE_PIL else _cache_bmp
+                ctype = "image/png" if path == "/controls.png" and _HAVE_PIL else "image/bmp"
+            if not body:
+                self._send(503, b"relay: controls capture produced no image\n")
                 return
             self._send(200, body, ctype)
             return
