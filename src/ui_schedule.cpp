@@ -76,7 +76,7 @@ static void refresh_slots_panel() {
         lv_obj_t *lbl = lv_label_create(g_slots_cont);
         lv_label_set_text(lbl, g_state.data_loading
             ? "Loading schedule..." : "No start times configured.");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(C_MUTED), 0);
         lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 0);
         return;
@@ -93,7 +93,7 @@ static void refresh_slots_panel() {
                  slot.enabled ? "" : "(disabled)  ",
                  slot.time_str);
         lv_label_set_text(time_lbl, slot.time_str);
-        lv_obj_set_style_text_font(time_lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(time_lbl, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(time_lbl, lv_color_hex(slot.enabled ? C_ORANGE : C_MUTED), 0);
         lv_obj_set_pos(time_lbl, 0, y);
         y += 30;
@@ -106,7 +106,7 @@ static void refresh_slots_panel() {
             snprintf(zbuf, sizeof(zbuf), "   %s  —  %.0f min",
                      zone_display_name(zone.name), zone.duration_min);
             lv_label_set_text(zlbl, zbuf);
-            lv_obj_set_style_text_font(zlbl, &lv_font_montserrat_16, 0);
+            lv_obj_set_style_text_font(zlbl, &lv_font_montserrat_20, 0);
             lv_obj_set_style_text_color(zlbl,
                 lv_color_hex(zone.enabled ? C_TEXT : C_MUTED), 0);
             lv_obj_set_pos(zlbl, 0, y);
@@ -164,13 +164,13 @@ void ui_schedule_build() {
     lv_obj_add_event_cb(back_btn, on_back_tap, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bl = lv_label_create(back_btn);
     lv_label_set_text(bl, "< BACK");
-    lv_obj_set_style_text_font(bl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(bl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(bl, lv_color_hex(C_MUTED), 0);
     lv_obj_center(bl);
 
     g_sched_title = lv_label_create(g_sched_scr);
     lv_label_set_text(g_sched_title, "WATERING SCHEDULE");
-    lv_obj_set_style_text_font(g_sched_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(g_sched_title, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(g_sched_title, lv_color_hex(C_TEXT), 0);
     lv_obj_set_style_text_letter_space(g_sched_title, 2, 0);
     lv_obj_align(g_sched_title, LV_ALIGN_TOP_MID, 0, 20);
@@ -190,20 +190,20 @@ void ui_schedule_build() {
     lv_obj_add_event_cb(g_save_btn, on_save_tap, LV_EVENT_CLICKED, nullptr);
     g_save_lbl = lv_label_create(g_save_btn);
     lv_label_set_text(g_save_lbl, "SAVE");
-    lv_obj_set_style_text_font(g_save_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(g_save_lbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(g_save_lbl, lv_color_hex(C_TEXT), 0);
     lv_obj_center(g_save_lbl);
 
     g_status_lbl = lv_label_create(g_sched_scr);
     lv_label_set_text(g_status_lbl, "");
-    lv_obj_set_style_text_font(g_status_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(g_status_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_status_lbl, lv_color_hex(C_SUCCESS), 0);
     lv_obj_align(g_status_lbl, LV_ALIGN_TOP_RIGHT, -16, 64);
 
     /* ── Section label ─────────────────────────────────── */
     lv_obj_t *sec_lbl = lv_label_create(g_sched_scr);
     lv_label_set_text(sec_lbl, "WATERING DAYS  (tap to toggle)");
-    lv_obj_set_style_text_font(sec_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(sec_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(sec_lbl, lv_color_hex(C_MUTED), 0);
     lv_obj_set_style_text_letter_space(sec_lbl, 1, 0);
     lv_obj_align(sec_lbl, LV_ALIGN_TOP_LEFT, 24, 72);
@@ -230,13 +230,13 @@ void ui_schedule_build() {
         /* Day-of-week abbreviation */
         lv_obj_t *dow = lv_label_create(cell);
         lv_label_set_text(dow, DOW_SHORT[dow_for_idx(i)]);
-        lv_obj_set_style_text_font(dow, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(dow, &lv_font_montserrat_18, 0);
         lv_obj_align(dow, LV_ALIGN_TOP_MID, 0, 8);
 
         /* ON/OFF indicator */
         lv_obj_t *ind = lv_label_create(cell);
         lv_label_set_text(ind, "ON");
-        lv_obj_set_style_text_font(ind, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(ind, &lv_font_montserrat_16, 0);
         lv_obj_align(ind, LV_ALIGN_BOTTOM_MID, 0, -8);
 
         g_day_cells[i] = cell;
@@ -246,7 +246,7 @@ void ui_schedule_build() {
     /* Legend */
     lv_obj_t *leg = lv_label_create(g_sched_scr);
     lv_label_set_text(leg, "BLUE = watering day   DARK = skip   ORANGE border = today");
-    lv_obj_set_style_text_font(leg, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(leg, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(leg, lv_color_hex(C_MUTED), 0);
     lv_obj_align(leg, LV_ALIGN_TOP_MID, 0, GRID_Y0 + 2*(CH+GAP) + 6);
 
@@ -254,7 +254,7 @@ void ui_schedule_build() {
     int slots_y = GRID_Y0 + 2*(CH+GAP) + 30;
     lv_obj_t *st_lbl = lv_label_create(g_sched_scr);
     lv_label_set_text(st_lbl, "START TIMES");
-    lv_obj_set_style_text_font(st_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(st_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(st_lbl, lv_color_hex(C_MUTED), 0);
     lv_obj_set_style_text_letter_space(st_lbl, 1, 0);
     lv_obj_set_pos(st_lbl, 24, slots_y);

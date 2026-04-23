@@ -52,7 +52,7 @@ static void rebuild_list() {
         lv_obj_t *lbl = lv_label_create(g_hist_list);
         lv_label_set_text(lbl, g_state.data_loading
             ? "Loading history..." : "No watering history recorded.");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(C_MUTED), 0);
         lv_obj_set_width(lbl, 700);
         return;
@@ -76,7 +76,7 @@ static void rebuild_list() {
         /* Zone name */
         lv_obj_t *zone_lbl = lv_label_create(row);
         lv_label_set_text(zone_lbl, zone_display_name(e.zone));
-        lv_obj_set_style_text_font(zone_lbl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(zone_lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(zone_lbl, lv_color_hex(C_TEXT), 0);
         lv_obj_set_width(zone_lbl, 200);
         lv_obj_align(zone_lbl, LV_ALIGN_LEFT_MID, 0, 0);
@@ -86,7 +86,7 @@ static void rebuild_list() {
         fmt_datetime(e.start_iso, dt, sizeof(dt));
         lv_obj_t *dt_lbl = lv_label_create(row);
         lv_label_set_text(dt_lbl, dt);
-        lv_obj_set_style_text_font(dt_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(dt_lbl, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(dt_lbl, lv_color_hex(C_MUTED), 0);
         lv_obj_align(dt_lbl, LV_ALIGN_LEFT_MID, 210, 0);
 
@@ -95,14 +95,14 @@ static void rebuild_list() {
         fmt_duration(e.duration_sec, dur, sizeof(dur));
         lv_obj_t *dur_lbl = lv_label_create(row);
         lv_label_set_text(dur_lbl, dur);
-        lv_obj_set_style_text_font(dur_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_font(dur_lbl, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(dur_lbl, lv_color_hex(C_TEXT), 0);
         lv_obj_align(dur_lbl, LV_ALIGN_LEFT_MID, 430, 0);
 
         /* Manual / scheduled badge */
         lv_obj_t *badge = lv_label_create(row);
         lv_label_set_text(badge, e.is_manual ? "MANUAL" : "SCHED");
-        lv_obj_set_style_text_font(badge, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(badge, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(badge,
             lv_color_hex(e.is_manual ? C_ORANGE : 0x7EF082u), 0);
         lv_obj_align(badge, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -112,7 +112,7 @@ static void rebuild_list() {
             lv_obj_set_style_text_color(zone_lbl, lv_color_hex(C_MUTED), 0);
             lv_obj_t *nc = lv_label_create(row);
             lv_label_set_text(nc, "STOPPED");
-            lv_obj_set_style_text_font(nc, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_font(nc, &lv_font_montserrat_16, 0);
             lv_obj_set_style_text_color(nc, lv_color_hex(C_DANGER), 0);
             lv_obj_align(nc, LV_ALIGN_RIGHT_MID, -64, 0);
         }
@@ -145,14 +145,14 @@ void ui_history_build() {
     lv_obj_add_event_cb(back, on_back_tap, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *bl = lv_label_create(back);
     lv_label_set_text(bl, "< BACK");
-    lv_obj_set_style_text_font(bl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(bl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(bl, lv_color_hex(C_MUTED), 0);
     lv_obj_center(bl);
 
     /* Title */
     lv_obj_t *title = lv_label_create(g_hist_scr);
     lv_label_set_text(title, "WATERING HISTORY");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(C_TEXT), 0);
     lv_obj_set_style_text_letter_space(title, 2, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
@@ -168,7 +168,7 @@ void ui_history_build() {
     for (int i = 0; i < 4; i++) {
         lv_obj_t *h = lv_label_create(g_hist_scr);
         lv_label_set_text(h, HDRS[i]);
-        lv_obj_set_style_text_font(h, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(h, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(h, lv_color_hex(C_MUTED), 0);
         lv_obj_set_pos(h, HDR_X[i], 62);
     }

@@ -302,14 +302,14 @@ static void create_header(lv_obj_t *scr) {
 
     g_sub_lbl = lv_label_create(scr);
     lv_label_set_text(g_sub_lbl, "BOISE STATE EDITION");
-    lv_obj_set_style_text_font(g_sub_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(g_sub_lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(g_sub_lbl, lv_color_hex(C_ORANGE), 0);
     lv_obj_set_style_text_letter_space(g_sub_lbl, 2, 0);
     lv_obj_align_to(g_sub_lbl, g_brand_img, LV_ALIGN_OUT_BOTTOM_LEFT, 8, -2);
 
     g_mode_lbl = lv_label_create(scr);
     lv_label_set_text(g_mode_lbl, "DEMO MODE");
-    lv_obj_set_style_text_font(g_mode_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(g_mode_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_mode_lbl, lv_color_hex(C_MUTED), 0);
     lv_obj_align(g_mode_lbl, LV_ALIGN_TOP_RIGHT, -24, 24);
 }
@@ -338,7 +338,7 @@ static void create_idle_group(lv_obj_t *scr) {
     lv_label_set_text(g_idle_date, "---");
     lv_obj_set_width(g_idle_date, 560);
     lv_obj_set_style_text_align(g_idle_date, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_idle_date, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(g_idle_date, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(g_idle_date, lv_color_hex(C_MUTED), 0);
     lv_obj_align(g_idle_date, LV_ALIGN_TOP_MID, 0, 240);
 
@@ -347,7 +347,7 @@ static void create_idle_group(lv_obj_t *scr) {
     lv_label_set_text(g_idle_cond, "CLEAR SKIES");
     lv_obj_set_width(g_idle_cond, 560);
     lv_obj_set_style_text_align(g_idle_cond, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_idle_cond, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(g_idle_cond, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(g_idle_cond, lv_color_hex(C_TEXT), 0);
     lv_obj_align(g_idle_cond, LV_ALIGN_TOP_MID, 0, 278);
 
@@ -356,7 +356,7 @@ static void create_idle_group(lv_obj_t *scr) {
     lv_label_set_text(g_idle_meta, "74 F  |  HUM 52%  |  WIND 5 MPH NW");
     lv_obj_set_width(g_idle_meta, 660);
     lv_obj_set_style_text_align(g_idle_meta, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_idle_meta, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(g_idle_meta, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(g_idle_meta, lv_color_hex(C_MUTED), 0);
     lv_obj_align(g_idle_meta, LV_ALIGN_TOP_MID, 0, 314);
 
@@ -365,7 +365,7 @@ static void create_idle_group(lv_obj_t *scr) {
     lv_label_set_text(g_idle_next, "NEXT: GARDEN  07:00");
     lv_obj_set_width(g_idle_next, 560);
     lv_obj_set_style_text_align(g_idle_next, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_idle_next, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(g_idle_next, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_idle_next, lv_color_hex(C_ORANGE), 0);
     lv_obj_align(g_idle_next, LV_ALIGN_TOP_MID, 0, 340);
 }
@@ -406,7 +406,7 @@ static void create_active_group(lv_obj_t *scr) {
     lv_label_set_text(g_act_sub, "WATERING IN PROGRESS");
     lv_obj_set_width(g_act_sub, 420);
     lv_obj_set_style_text_align(g_act_sub, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_act_sub, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(g_act_sub, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(g_act_sub, lv_color_hex(C_MUTED), 0);
     lv_obj_align(g_act_sub, LV_ALIGN_TOP_MID, 0, 178);
 
@@ -447,7 +447,7 @@ static void create_controls_group(lv_obj_t *scr) {
     /* Touch hint */
     g_hint_lbl = lv_label_create(g_ctrl_grp);
     lv_label_set_text(g_hint_lbl, "TOUCH SCREEN FOR CONTROLS");
-    lv_obj_set_style_text_font(g_hint_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(g_hint_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_hint_lbl, lv_color_hex(C_MUTED), 0);
     lv_obj_align(g_hint_lbl, LV_ALIGN_CENTER, 0, 0);
 
@@ -462,7 +462,7 @@ static void create_controls_group(lv_obj_t *scr) {
     lv_obj_add_event_cb(g_stop_btn, on_stop, LV_EVENT_CLICKED, nullptr);
     g_stop_lbl = lv_label_create(g_stop_btn);
     lv_label_set_text(g_stop_lbl, "STOP ALL WATERING");
-    lv_obj_set_style_text_font(g_stop_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(g_stop_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(g_stop_lbl, lv_color_hex(C_TEXT), 0);
     lv_obj_center(g_stop_lbl);
 
@@ -481,7 +481,7 @@ static void create_controls_group(lv_obj_t *scr) {
                             reinterpret_cast<void *>(static_cast<intptr_t>(i)));
         g_chips[i].lbl = lv_label_create(g_chips[i].btn);
         lv_label_set_text(g_chips[i].lbl, ZONE_DISPLAY_NAMES[i]);
-        lv_obj_set_style_text_font(g_chips[i].lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(g_chips[i].lbl, &lv_font_montserrat_18, 0);
         lv_obj_set_style_text_color(g_chips[i].lbl, lv_color_hex(C_TEXT), 0);
         lv_obj_center(g_chips[i].lbl);
     }
@@ -498,7 +498,7 @@ static void create_controls_group(lv_obj_t *scr) {
     lv_obj_add_event_cb(g_hist_btn, on_history_btn, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *hl = lv_label_create(g_hist_btn);
     lv_label_set_text(hl, "HISTORY");
-    lv_obj_set_style_text_font(hl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(hl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(hl, lv_color_hex(C_ORANGE), 0);
     lv_obj_center(hl);
 
@@ -514,7 +514,7 @@ static void create_controls_group(lv_obj_t *scr) {
     lv_obj_add_event_cb(g_sched_btn, on_schedule_btn, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *sl = lv_label_create(g_sched_btn);
     lv_label_set_text(sl, "SCHEDULE");
-    lv_obj_set_style_text_font(sl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(sl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(sl, lv_color_hex(C_ORANGE), 0);
     lv_obj_center(sl);
 }
@@ -533,7 +533,7 @@ static void create_snap_button(lv_obj_t *scr) {
 
     g_snap_lbl = lv_label_create(g_snap_btn);
     lv_label_set_text(g_snap_lbl, "SAVE SNAP");
-    lv_obj_set_style_text_font(g_snap_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(g_snap_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_snap_lbl, lv_color_hex(C_TEXT), 0);
     lv_obj_center(g_snap_lbl);
 }
@@ -555,7 +555,7 @@ static void create_toast(lv_obj_t *scr) {
     lv_obj_set_width(g_toast_lbl, 408);
     lv_label_set_long_mode(g_toast_lbl, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_align(g_toast_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(g_toast_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(g_toast_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_toast_lbl, lv_color_hex(C_TEXT), 0);
     lv_obj_center(g_toast_lbl);
 }
@@ -587,7 +587,7 @@ static void create_duration_picker(lv_obj_t *scr) {
     /* Title */
     g_picker_title = lv_label_create(card);
     lv_label_set_text(g_picker_title, "START ZONE");
-    lv_obj_set_style_text_font(g_picker_title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(g_picker_title, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(g_picker_title, lv_color_hex(C_TEXT), 0);
     lv_obj_set_style_text_letter_space(g_picker_title, 2, 0);
     lv_obj_align(g_picker_title, LV_ALIGN_TOP_MID, 0, 18);
@@ -609,7 +609,7 @@ static void create_duration_picker(lv_obj_t *scr) {
         snprintf(lbl, sizeof(lbl), "%d MIN", DURATIONS[i]);
         lv_obj_t *lb = lv_label_create(g_dur_btns[i]);
         lv_label_set_text(lb, lbl);
-        lv_obj_set_style_text_font(lb, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(lb, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lb, lv_color_hex(C_TEXT), 0);
         lv_obj_center(lb);
     }
@@ -625,7 +625,7 @@ static void create_duration_picker(lv_obj_t *scr) {
     lv_obj_add_event_cb(cancel, on_picker_cancel, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *cl = lv_label_create(cancel);
     lv_label_set_text(cl, "CANCEL");
-    lv_obj_set_style_text_font(cl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(cl, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(cl, lv_color_hex(C_MUTED), 0);
     lv_obj_center(cl);
 }
@@ -765,7 +765,7 @@ void ui_show_splash() {
     /* "Boise State Edition" subtitle */
     lv_obj_t *sub = lv_label_create(g_splash_screen);
     lv_label_set_text(sub, "BOISE STATE EDITION");
-    lv_obj_set_style_text_font(sub, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(sub, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(sub, lv_color_hex(C_ORANGE), 0);
     lv_obj_set_style_text_letter_space(sub, 3, 0);
     lv_obj_align(sub, LV_ALIGN_BOTTOM_MID, 0, -28);
