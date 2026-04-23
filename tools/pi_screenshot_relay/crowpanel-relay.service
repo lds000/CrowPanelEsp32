@@ -1,0 +1,21 @@
+[Unit]
+Description=CrowPanel screenshot relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lds00
+WorkingDirectory=/home/lds00/crowpanel-relay
+Environment=PANEL_HOST=192.168.68.107
+Environment=PANEL_PORT=8080
+Environment=BIND_HOST=0.0.0.0
+Environment=BIND_PORT=9108
+ExecStart=/usr/bin/python3 /home/lds00/crowpanel-relay/relay.py
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -25,21 +25,6 @@ extern void ui_show_toast(const char *text, uint32_t ms);
 
 static WebServer g_ota_http(OTA_HTTP_PORT);
 
-static void on_ota_start() {
-    Serial.println("[OTA] Update starting");
-    ui_show_toast("OTA IN PROGRESS...", 120000);
-}
-
-static void on_ota_end(bool success) {
-    if (success) {
-        Serial.println("[OTA] Update complete — rebooting");
-        ui_show_toast("OTA DONE — REBOOTING", 4000);
-    } else {
-        Serial.println("[OTA] Update failed");
-        ui_show_toast("OTA FAILED", 5000);
-    }
-}
-
 /* ── Public API ──────────────────────────────────────────────────────── */
 
 void ota_server_init() {
@@ -73,10 +58,13 @@ void ota_server_init() {
     });
     ArduinoOTA.begin();
 
-    /* ElegantOTA browser upload — handles large .bin files in chunks */
+    /* ElegantOTA 2.2.9 browser upload at /update.
+     * Note: 2.x exposes only begin() — the onStart/onEnd/loop callbacks
+     * appeared in ElegantOTA 3.x, which is currently a paid Pro library
+     * with telemetry. We deliberately stay on 2.2.9 (free, no telemetry)
+     * and accept losing the on-end toast; the device reboot itself is
+     * the visible signal that the OTA finished. */
     ElegantOTA.begin(&g_ota_http, OTA_USERNAME, OTA_PASSWORD);
-    ElegantOTA.onStart(on_ota_start);
-    ElegantOTA.onEnd(on_ota_end);
     g_ota_http.begin();
 
     Serial.printf("[OTA] ArduinoOTA  — %s.local  (port 3232)\n", OTA_HOSTNAME);
@@ -87,7 +75,8 @@ void ota_server_init() {
 void ota_server_loop() {
     ArduinoOTA.handle();
     g_ota_http.handleClient();
-    ElegantOTA.loop();
+    /* ElegantOTA.loop() does not exist in 2.2.9 — the WebServer poll above
+     * is sufficient because the upload is handled inside the request. */
 }
 
 #endif /* APP_MODE_LIVE && ENABLE_OTA */
