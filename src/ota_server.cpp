@@ -144,6 +144,12 @@ static void handle_update_finish() {
 /* ── Public API ──────────────────────────────────────────────────────── */
 
 void ota_server_init() {
+    /* Idempotent — calling this multiple times (e.g. after a late WiFi
+     * reconnect) is a no-op after the first successful invocation. */
+    static bool s_initialized = false;
+    if (s_initialized) return;
+    s_initialized = true;
+
     /* ArduinoOTA — used by PlatformIO espota upload */
     ArduinoOTA.setHostname(OTA_HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASSWORD);

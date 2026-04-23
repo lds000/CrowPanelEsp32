@@ -380,8 +380,11 @@ static void connect_wifi() {
     WiFi.setHostname(OTA_HOSTNAME);
 #endif
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    /* 60-second association window — DHCP / 2.4 GHz contention can exceed
+     * 20 s on busy networks, and missing the OTA-init call here would brick
+     * the device until USB recovery. */
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 120) {
         delay(500); lv_timer_handler(); attempts++;
     }
     g_state.wifi_connected = (WiFi.status() == WL_CONNECTED);
@@ -700,6 +703,11 @@ void loop() {
             g_state.wifi_connected = ok;
             if (!ok) WiFi.reconnect();
         }
+#if ENABLE_OTA
+        /* If WiFi came up after the boot-time init missed the window,
+         * bring OTA online now (ota_server_init is idempotent). */
+        if (g_state.wifi_connected) ota_server_init();
+#endif
     }
 #else
     update_demo_state();
