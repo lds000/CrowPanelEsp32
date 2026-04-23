@@ -4,11 +4,16 @@ description: >-
   Deploy and verify firmware to the LawnBot CrowPanel ESP32 display, via
   WiFi OTA (ArduinoOTA + HTTP browser upload) or USB serial. Use when the
   user wants to flash, upload, OTA, deploy, push firmware, update the
-  CrowPanel, or troubleshoot an OTA that won't connect, won't authenticate,
-  or hangs after auth. Encodes the project's known footguns (LovyanGFX/LVGL
-  version pinning, DEMO/LIVE config secrets, Tailscale subnet routing,
-  required first-time USB flash) so subsequent deploys avoid the same
-  failures.
+  CrowPanel, install on a remote/second PC, or troubleshoot an OTA that
+  won't connect, won't authenticate, hangs after auth, or bricked the
+  listener. Encodes the project's known footguns: the OTA env does NOT
+  change firmware contents (only upload transport), include/config.h
+  must be edited to LIVE locally before any deploy (and reverted after),
+  LovyanGFX must stay pinned at 1.1.16 for LVGL 8.4, Tailscale subnet
+  routing breaks ArduinoOTA's UDP+TCP callback (use HTTP OTA instead),
+  ElegantOTA is NOT used, and the device requires a one-time USB flash
+  before WiFi OTA is possible. Read this BEFORE issuing any pio upload
+  command on this project.
 ---
 
 # Deploy Ops — LawnBot CrowPanel
@@ -16,6 +21,40 @@ description: >-
 This project flashes an Elecrow CrowPanel 7" (ESP32-S3-WROOM-1-N4R8) over
 either USB serial (CH340) or WiFi OTA. WiFi OTA only works after a
 prerequisite USB flash that contains the OTA listener.
+
+## STOP — read this before issuing any flash command
+
+Three misconceptions cause every bricked OTA on this project. If you are
+about to run a `pio run --target upload` and any of these are unfamiliar,
+re-read this section first:
+
+1. **The `crowpanel-7inch-ota` env does NOT change firmware contents.** It
+   extends `crowpanel-7inch` and overrides only `upload_protocol`,
+   `upload_port`, and `upload_flags`. `APP_MODE`, `WIFI_SSID`,
+   `WIFI_PASSWORD`, `LAWNBOT_HOST`, `ENABLE_OTA`, `ENABLE_SCREENSHOT_HTTP`
+   etc. all come from `include/config.h`, which is committed as
+   `APP_MODE_DEMO` with placeholder WiFi creds (`Guest`/`Healthy!`). To
+   produce a LIVE-mode firmware you **must** edit `include/config.h`
+   locally before building, then revert the edit after upload.
+
+2. **OTA-pushing a DEMO build will brick the OTA listener.** A DEMO firmware
+   does not connect to your real WiFi and does not start the OTA server. If
+   you push it via OTA, the device reboots into DEMO, drops off the
+   network, and the only way back is a physical USB flash. This is the
+   single most common deploy failure on this project. The fix is always
+   step 1: edit `include/config.h` to LIVE first.
+
+3. **OTA from any LAN host is fine, but transport choice matters.**
+   `crowpanel-7inch-ota` uses ArduinoOTA (UDP/3232 invite + TCP callback).
+   This breaks on hosts where a VPN (Tailscale, NordVPN, etc.) advertises
+   subnet routes for the panel's `192.168.68.0/22` LAN — the device can't
+   TCP back to the host's VPN-side IP. The HTTP browser path
+   (`curl ... /update`) is a single TCP stream initiated by the host and
+   works regardless. **When in doubt, use HTTP OTA.** See "Common issues"
+   §3 for diagnostics.
+
+This project does **not** use ElegantOTA. The OTA stack is `ArduinoOTA` +
+a hand-rolled HTTP `/update` handler in `src/ota_server.cpp`.
 
 ## Quick reference
 
@@ -122,6 +161,41 @@ $page = (Invoke-WebRequest "http://192.168.68.107/" -TimeoutSec 10 -UseBasicPars
 Confirm the **Build** timestamp matches `(Get-Item .pio\build\crowpanel-7inch\firmware.bin).LastWriteTime`
 (within a few seconds — the C `__DATE__`/`__TIME__` is when `ota_server.cpp` was compiled).
 
+## Deploying from a different PC (fresh checkout, remote, or hub Pi)
+
+When the deploy is happening from a machine that has never built this
+project before, the workflow is identical to Steps 1-4 above with one
+extra prelude. **Do not assume the OTA env produces a LIVE build on its
+own** — see "STOP" §1 at the top.
+
+```powershell
+git clone https://github.com/lds000/CrowPanelEsp32.git
+cd CrowPanelEsp32
+# 1. Edit include/config.h LOCALLY — APP_MODE_LIVE, real WIFI_SSID/PASSWORD,
+#    real LAWNBOT_HOST. DO NOT COMMIT this edit.
+pio run -e crowpanel-7inch                          # build LIVE firmware
+# 2. Verify the binary contains your real SSID (Step 2 in this doc).
+# 3. Upload — pick ONE based on the host's network situation:
+pio run -e crowpanel-7inch --target upload --upload-port COMx   # USB (most reliable)
+pio run -e crowpanel-7inch-ota --target upload                  # ArduinoOTA (if no VPN subnet shadow)
+curl.exe -F "firmware=@.pio/build/crowpanel-7inch/firmware.bin" `
+         http://192.168.68.107/update --max-time 180             # HTTP OTA (works even with Tailscale)
+# 4. Revert the local config edit immediately.
+git checkout -- include/config.h
+```
+
+**Picking the upload channel from the remote PC:**
+
+| Remote PC situation | Recommended channel |
+|---|---|
+| USB-connected to the panel | USB serial — fastest, no network surprises |
+| On the same LAN, no VPN subnet routes for `192.168.68.0/22` | ArduinoOTA |
+| On the same LAN, but Tailscale/NordVPN/etc. shadows that subnet | HTTP OTA (`curl ... /update`) |
+| Off-LAN, reaching the panel only through Tailscale subnet routing | HTTP OTA via the Tailscale-routed LAN IP |
+
+The Cursor agent on the remote PC will see this skill on `git pull` and
+should consult it before running any `pio ... --target upload` command.
+
 ## Common issues and fixes
 
 ### 1. Build fails — `lv_font_montserrat_48 undeclared`, `lv_img_dsc_t unknown`
@@ -150,12 +224,21 @@ stubs. If you ever extract OTA into a separate module, keep the stubs.
 
 ### 3. OTA hangs at `Waiting for device...` after `Authenticating...OK`
 
+**This is per-host, not project-wide.** ArduinoOTA works fine from any LAN
+host whose outbound packets to `192.168.68.107` are sourced from a LAN IP.
+It breaks on hosts where a VPN (Tailscale, NordVPN, ZeroTier, etc.)
+captures the panel's subnet.
+
 **Cause**: `espota.py` sends UDP to the device, the device authenticates,
 then opens a *new TCP back-connection* to the host's source IP. If the
 host has Tailscale and Tailscale advertises subnet routes for the LAN
 (`192.168.68.0/22` with metric 5 vs LAN metric 291), Windows sources
 outbound traffic from `100.87.89.90` (the Tailscale IP). The device tries
 to reach that and can't.
+
+**Hosts known affected**: the development workstation in this project
+(Windows + Tailscale subnet routing).
+**Hosts known clean**: the hub Pi at `192.168.68.88` (LAN-only).
 
 **Verify**:
 ```powershell
