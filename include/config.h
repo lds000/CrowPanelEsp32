@@ -26,6 +26,10 @@
 /* ── Defaults ──────────────────────────────────────────────── */
 #define DEFAULT_RUN_MINUTES  5    /* Duration when tapping RUN on a zone card */
 
+/* Temporary UI workbench: boot directly into the controls view and hide the
+ * idle/active dashboard content while refining the controls. */
+#define UI_CONTROLS_ONLY_DEBUG  1
+
 /* ── Demo mode ─────────────────────────────────────────────── */
 #define DEMO_AUTOCYCLE_SECONDS   20   /* Idle time before auto-starting a demo run */
 #define DEMO_AUTORUN_SECONDS     75   /* Hands-free animated demo run length */

@@ -1,10 +1,10 @@
 /**
- * ui.cpp — Main dashboard: idle weather scene + active watering scene
+ * ui.cpp â€” Main dashboard: idle weather scene + active watering scene
  *
  * Navigation:
- *   Idle → touch → controls appear (zone chips, HISTORY, SCHEDULE buttons)
- *   Zone chip → duration picker modal → starts run
- *   HISTORY/SCHEDULE → separate full screens (built in ui_history.cpp / ui_schedule.cpp)
+ *   Idle â†’ touch â†’ controls appear (zone chips, HISTORY, SCHEDULE buttons)
+ *   Zone chip â†’ duration picker modal â†’ starts run
+ *   HISTORY/SCHEDULE â†’ separate full screens (built in ui_history.cpp / ui_schedule.cpp)
  */
 
 #include <lvgl.h>
@@ -28,9 +28,9 @@ void ui_history_build();
 void ui_history_refresh();
 void ui_show_toast(const char *text, uint32_t ms);
 
-/* ═══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    ENUMS / HELPERS
-═══════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 enum WeatherCondition {
     WEATHER_UNKNOWN, WEATHER_SUNNY, WEATHER_CLOUDY,
     WEATHER_RAINY,   WEATHER_WINDY, WEATHER_SNOW
@@ -141,9 +141,9 @@ static lv_obj_t *make_wind(lv_obj_t *p, int x, int y, int w) {
     return o;
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    GLOBAL OBJECTS
-═══════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 lv_obj_t *g_dash_screen   = nullptr;
 lv_obj_t *g_splash_screen = nullptr;
 
@@ -163,12 +163,23 @@ static lv_obj_t *g_idle_cond, *g_idle_meta, *g_idle_next;
 /* Active content */
 static lv_obj_t *g_act_grp, *g_act_zone, *g_act_count, *g_act_sub, *g_act_bar;
 
-/* Controls bar (130 px at bottom) */
-#define CTRL_H 130
+/* Controls surface */
 static lv_obj_t *g_ctrl_grp, *g_hint_lbl, *g_stop_btn, *g_stop_lbl;
+static lv_obj_t *g_ctrl_title, *g_ctrl_sub, *g_ctrl_status, *g_manual_card, *g_nav_card, *g_danger_card;
 static lv_obj_t *g_hist_btn,  *g_sched_btn;
 struct ZoneChip { lv_obj_t *btn; lv_obj_t *lbl; };
 static ZoneChip g_chips[3];
+
+#define LB_BG       0x030712u
+#define LB_CARD     0x111827u
+#define LB_BORDER   0x1F2937u
+#define LB_TEXT     0xF9FAFBu
+#define LB_MUTED    0x9CA3AFu
+#define LB_GREEN    0x22C55Eu
+#define LB_GREEN_D  0x16A34Au
+#define LB_RED      0xEF4444u
+#define LB_RED_D    0xB91C1Cu
+#define LB_YELLOW   0xF59E0Bu
 
 /* Toast */
 static lv_obj_t *g_toast = nullptr;
@@ -182,9 +193,9 @@ static int       g_picker_zone  = -1;
 static const int DURATIONS[]    = {1, 3, 5, 10, 15, 20};
 static lv_obj_t *g_dur_btns[6];
 
-/* ═══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    DURATION PICKER EVENTS
-═══════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 static void on_duration(lv_event_t *e) {
     int min = (int)(intptr_t)lv_event_get_user_data(e);
     if (g_picker_zone >= 0 && g_picker_zone < 3) {
@@ -211,9 +222,9 @@ static void show_duration_picker(int zone_idx) {
     lv_obj_move_foreground(g_picker_panel);
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    CONTROL CALLBACKS
-═══════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 static void on_stop(lv_event_t * /*e*/) { g_pending.type = PENDING_STOP_ALL; }
 
 static void on_zone_chip(lv_event_t *e) {
@@ -238,9 +249,9 @@ static void on_schedule_btn(lv_event_t * /*e*/) {
     ui_schedule_build();
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    SCENE BUILDERS
-═══════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 static void create_background(lv_obj_t *scr) {
     g_bg_layer = lv_obj_create(scr);
     lv_obj_set_size(g_bg_layer, SCREEN_W, SCREEN_H);
@@ -309,7 +320,7 @@ static void create_idle_group(lv_obj_t *scr) {
     lv_obj_set_pos(g_idle_grp, 0, 0);
     clear_chrome(g_idle_grp);
 
-    /* Big clock — baked 120pt Arial Bold bitmap font */
+    /* Big clock â€” baked 120pt Arial Bold bitmap font */
     g_idle_time = lv_label_create(g_idle_grp);
     lv_label_set_text(g_idle_time, "--:--");
     lv_obj_set_width(g_idle_time, 560);
@@ -411,101 +422,130 @@ static void create_active_group(lv_obj_t *scr) {
     lv_obj_set_style_radius(g_act_bar, 10, LV_PART_INDICATOR);
 }
 
-/* Controls bar ─ 130 px strip at bottom of screen.
- *
- * Layout when controls visible:
- *   [HISTORY]  [POTS]  [GARDEN]  [MISTERS]  [SCHEDULE]
- *   or (if active):
- *   [HISTORY]  [    STOP ALL WATERING    ]  [SCHEDULE]
- *
- * Layout when controls hidden: centered "TOUCH SCREEN FOR CONTROLS" hint.
- *
- * X positions (from left):
- *   HISTORY  : x=20,  w=120
- *   Chip 0   : x=157, w=152
- *   Chip 1   : x=317, w=152
- *   Chip 2   : x=477, w=152
- *   SCHEDULE : x=660, w=120
- */
+static lv_obj_t *make_settings_card(lv_obj_t *parent, int x, int y, int w, int h,
+                                    const char *eyebrow, const char *title) {
+    lv_obj_t *card = lv_obj_create(parent);
+    lv_obj_set_size(card, w, h);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_set_style_bg_color(card, lv_color_hex(LB_CARD), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(LB_BORDER), 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_pad_all(card, 0, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *ey = lv_label_create(card);
+    lv_label_set_text(ey, eyebrow);
+    lv_obj_set_style_text_font(ey, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(ey, lv_color_hex(LB_MUTED), 0);
+    lv_obj_set_style_text_letter_space(ey, 2, 0);
+    lv_obj_set_pos(ey, 16, 14);
+
+    lv_obj_t *ttl = lv_label_create(card);
+    lv_label_set_text(ttl, title);
+    lv_obj_set_style_text_font(ttl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(ttl, lv_color_hex(LB_TEXT), 0);
+    lv_obj_set_pos(ttl, 16, 36);
+    return card;
+}
+
+static lv_obj_t *make_card_button(lv_obj_t *parent, int x, int y, int w, int h,
+                                  uint32_t bg, uint32_t fg, const char *text) {
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, w, h);
+    lv_obj_set_pos(btn, x, y);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(bg), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(LB_BORDER), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(fg), 0);
+    lv_obj_center(lbl);
+    return btn;
+}
+
 static void create_controls_group(lv_obj_t *scr) {
     g_ctrl_grp = lv_obj_create(scr);
-    lv_obj_set_size(g_ctrl_grp, SCREEN_W, CTRL_H);
-    lv_obj_set_pos(g_ctrl_grp, 0, SCREEN_H - CTRL_H);
-    clear_chrome(g_ctrl_grp);
+    lv_obj_set_size(g_ctrl_grp, SCREEN_W, SCREEN_H);
+    lv_obj_set_pos(g_ctrl_grp, 0, 0);
+    lv_obj_set_style_bg_color(g_ctrl_grp, lv_color_hex(LB_BG), 0);
+    lv_obj_set_style_bg_opa(g_ctrl_grp, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(g_ctrl_grp, 0, 0);
+    lv_obj_set_style_radius(g_ctrl_grp, 0, 0);
+    lv_obj_set_style_pad_all(g_ctrl_grp, 0, 0);
+    lv_obj_clear_flag(g_ctrl_grp, LV_OBJ_FLAG_SCROLLABLE);
 
     /* Touch hint */
     g_hint_lbl = lv_label_create(g_ctrl_grp);
     lv_label_set_text(g_hint_lbl, "TOUCH SCREEN FOR CONTROLS");
     lv_obj_set_style_text_font(g_hint_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_hint_lbl, lv_color_hex(C_MUTED), 0);
-    lv_obj_align(g_hint_lbl, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(g_hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -46);
 
-    /* STOP ALL button */
-    g_stop_btn = lv_btn_create(g_ctrl_grp);
-    lv_obj_set_size(g_stop_btn, 360, 54);
-    lv_obj_set_pos(g_stop_btn, 220, 38);
-    lv_obj_set_style_bg_color(g_stop_btn, lv_color_hex(C_DANGER), 0);
-    lv_obj_set_style_bg_color(g_stop_btn, lv_color_hex(0xB53936u), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(g_stop_btn, 0, 0);
-    lv_obj_set_style_radius(g_stop_btn, 16, 0);
-    lv_obj_add_event_cb(g_stop_btn, on_stop, LV_EVENT_CLICKED, nullptr);
-    g_stop_lbl = lv_label_create(g_stop_btn);
-    lv_label_set_text(g_stop_lbl, "STOP ALL WATERING");
-    lv_obj_set_style_text_font(g_stop_lbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(g_stop_lbl, lv_color_hex(C_TEXT), 0);
-    lv_obj_center(g_stop_lbl);
+    g_ctrl_title = lv_label_create(g_ctrl_grp);
+    lv_label_set_text(g_ctrl_title, "Controls");
+    lv_obj_set_style_text_font(g_ctrl_title, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(g_ctrl_title, lv_color_hex(LB_TEXT), 0);
+    lv_obj_set_pos(g_ctrl_title, 24, 20);
+
+    g_ctrl_status = lv_obj_create(g_ctrl_grp);
+    lv_obj_set_size(g_ctrl_status, 210, 34);
+    lv_obj_set_pos(g_ctrl_status, 566, 24);
+    lv_obj_set_style_bg_color(g_ctrl_status, lv_color_hex(0x052E16u), 0);
+    lv_obj_set_style_bg_opa(g_ctrl_status, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(g_ctrl_status, lv_color_hex(0x166534u), 0);
+    lv_obj_set_style_border_width(g_ctrl_status, 1, 0);
+    lv_obj_set_style_radius(g_ctrl_status, 17, 0);
+    lv_obj_clear_flag(g_ctrl_status, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *status_lbl = lv_label_create(g_ctrl_status);
+    lv_label_set_text(status_lbl, "LIVE  |  HUB CONNECTED");
+    lv_obj_set_style_text_font(status_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(status_lbl, lv_color_hex(LB_GREEN), 0);
+    lv_obj_center(status_lbl);
+
+    g_ctrl_sub = lv_label_create(g_ctrl_grp);
+    lv_label_set_text(g_ctrl_sub, "Manual watering and quick navigation");
+    lv_obj_set_style_text_font(g_ctrl_sub, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(g_ctrl_sub, lv_color_hex(LB_MUTED), 0);
+    lv_obj_set_pos(g_ctrl_sub, 26, 56);
+
+    g_manual_card = make_settings_card(g_ctrl_grp, 20, 96, 760, 142,
+                                       "MANUAL WATERING", "Zones");
+    g_nav_card = make_settings_card(g_ctrl_grp, 20, 258, 370, 174,
+                                    "NAVIGATION", "Schedules & history");
+    g_danger_card = make_settings_card(g_ctrl_grp, 410, 258, 370, 174,
+                                       "SAFETY", "Emergency stop");
 
     /* Zone chips */
-    static const int CHIP_X[3] = {157, 317, 477};
+    static const int CHIP_X[3] = {18, 260, 502};
     for (int i = 0; i < 3; i++) {
-        g_chips[i].btn = lv_btn_create(g_ctrl_grp);
-        lv_obj_set_size(g_chips[i].btn, 152, 54);
-        lv_obj_set_pos(g_chips[i].btn, CHIP_X[i], 38);
-        lv_obj_set_style_bg_color(g_chips[i].btn, lv_color_hex(C_PANEL), 0);
-        lv_obj_set_style_bg_opa(g_chips[i].btn, LV_OPA_90, 0);
-        lv_obj_set_style_border_color(g_chips[i].btn, lv_color_hex(C_PANEL_EDGE), 0);
-        lv_obj_set_style_border_width(g_chips[i].btn, 2, 0);
-        lv_obj_set_style_radius(g_chips[i].btn, 16, 0);
+        g_chips[i].btn = make_card_button(g_manual_card, CHIP_X[i], 78, 220, 46,
+                                          LB_GREEN_D, LB_TEXT, ZONE_DISPLAY_NAMES[i]);
         lv_obj_add_event_cb(g_chips[i].btn, on_zone_chip, LV_EVENT_CLICKED,
                             reinterpret_cast<void *>(static_cast<intptr_t>(i)));
-        g_chips[i].lbl = lv_label_create(g_chips[i].btn);
-        lv_label_set_text(g_chips[i].lbl, ZONE_DISPLAY_NAMES[i]);
-        lv_obj_set_style_text_font(g_chips[i].lbl, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(g_chips[i].lbl, lv_color_hex(C_TEXT), 0);
-        lv_obj_center(g_chips[i].lbl);
+        g_chips[i].lbl = lv_obj_get_child(g_chips[i].btn, 0);
     }
 
     /* HISTORY nav button */
-    g_hist_btn = lv_btn_create(g_ctrl_grp);
-    lv_obj_set_size(g_hist_btn, 120, 54);
-    lv_obj_set_pos(g_hist_btn, 20, 38);
-    lv_obj_set_style_bg_color(g_hist_btn, lv_color_hex(0x0A2240u), 0);
-    lv_obj_set_style_bg_opa(g_hist_btn, LV_OPA_90, 0);
-    lv_obj_set_style_border_color(g_hist_btn, lv_color_hex(C_ORANGE), 0);
-    lv_obj_set_style_border_width(g_hist_btn, 2, 0);
-    lv_obj_set_style_radius(g_hist_btn, 16, 0);
+    g_hist_btn = make_card_button(g_nav_card, 18, 78, 156, 54,
+                                  0x0F172Au, LB_YELLOW, "HISTORY");
     lv_obj_add_event_cb(g_hist_btn, on_history_btn, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *hl = lv_label_create(g_hist_btn);
-    lv_label_set_text(hl, "HISTORY");
-    lv_obj_set_style_text_font(hl, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(hl, lv_color_hex(C_ORANGE), 0);
-    lv_obj_center(hl);
 
     /* SCHEDULE nav button */
-    g_sched_btn = lv_btn_create(g_ctrl_grp);
-    lv_obj_set_size(g_sched_btn, 120, 54);
-    lv_obj_set_pos(g_sched_btn, 660, 38);
-    lv_obj_set_style_bg_color(g_sched_btn, lv_color_hex(0x0A2240u), 0);
-    lv_obj_set_style_bg_opa(g_sched_btn, LV_OPA_90, 0);
-    lv_obj_set_style_border_color(g_sched_btn, lv_color_hex(C_ORANGE), 0);
-    lv_obj_set_style_border_width(g_sched_btn, 2, 0);
-    lv_obj_set_style_radius(g_sched_btn, 16, 0);
+    g_sched_btn = make_card_button(g_nav_card, 194, 78, 156, 54,
+                                   0x0F172Au, LB_YELLOW, "SCHEDULE");
     lv_obj_add_event_cb(g_sched_btn, on_schedule_btn, LV_EVENT_CLICKED, nullptr);
-    lv_obj_t *sl = lv_label_create(g_sched_btn);
-    lv_label_set_text(sl, "SCHEDULE");
-    lv_obj_set_style_text_font(sl, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(sl, lv_color_hex(C_ORANGE), 0);
-    lv_obj_center(sl);
+
+    /* STOP ALL button */
+    g_stop_btn = make_card_button(g_danger_card, 18, 78, 332, 54,
+                                  LB_RED_D, LB_TEXT, "STOP ALL WATERING");
+    lv_obj_set_style_bg_color(g_stop_btn, lv_color_hex(LB_RED), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(g_stop_btn, on_stop, LV_EVENT_CLICKED, nullptr);
+    g_stop_lbl = lv_obj_get_child(g_stop_btn, 0);
 }
 
 static void create_toast(lv_obj_t *scr) {
@@ -530,7 +570,7 @@ static void create_toast(lv_obj_t *scr) {
     lv_obj_center(g_toast_lbl);
 }
 
-/* Duration picker modal — overlay panel, initially hidden */
+/* Duration picker modal â€” overlay panel, initially hidden */
 static void create_duration_picker(lv_obj_t *scr) {
     /* Semi-transparent backdrop */
     g_picker_panel = lv_obj_create(scr);
@@ -562,7 +602,7 @@ static void create_duration_picker(lv_obj_t *scr) {
     lv_obj_set_style_text_letter_space(g_picker_title, 2, 0);
     lv_obj_align(g_picker_title, LV_ALIGN_TOP_MID, 0, 18);
 
-    /* Duration buttons — 2 rows of 3 */
+    /* Duration buttons â€” 2 rows of 3 */
     static const int DX[6] = {24, 186, 348, 24, 186, 348};
     static const int DY[6] = {64, 64,  64, 140, 140, 140};
     for (int i = 0; i < 6; i++) {
@@ -600,9 +640,9 @@ static void create_duration_picker(lv_obj_t *scr) {
     lv_obj_center(cl);
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    UPDATERS
-═══════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 static void update_background() {
     WeatherCondition cond = get_condition();
     bool night = is_night();
@@ -679,10 +719,20 @@ static void update_idle_group() {
         snprintf(next_line, sizeof(next_line), "NO UPCOMING RUN");
     lv_label_set_text(g_idle_next, next_line);
 
-    set_hidden(g_idle_grp, g_state.current_run.active);
+    set_hidden(g_idle_grp,
+#if UI_CONTROLS_ONLY_DEBUG
+               true
+#else
+               g_state.current_run.active
+#endif
+    );
 }
 
 static void update_active_group() {
+#if UI_CONTROLS_ONLY_DEBUG
+    set_hidden(g_act_grp, true);
+    return;
+#endif
     if (!g_state.current_run.active) { set_hidden(g_act_grp, true); return; }
     lv_obj_clear_flag(g_act_grp, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(g_act_zone, zone_display_name(g_state.current_run.zone));
@@ -696,30 +746,41 @@ static void update_active_group() {
 }
 
 static void update_controls() {
-    bool show  = g_state.controls_visible;
+    bool show =
+#if UI_CONTROLS_ONLY_DEBUG
+        true;
+#else
+        g_state.controls_visible;
+#endif
     bool active = g_state.current_run.active;
 
     /* Background panel */
     if (show) {
-        lv_obj_set_style_bg_color(g_ctrl_grp, lv_color_hex(C_PANEL), 0);
-        lv_obj_set_style_bg_opa(g_ctrl_grp, LV_OPA_90, 0);
+        lv_obj_set_style_bg_color(g_ctrl_grp, lv_color_hex(LB_BG), 0);
+        lv_obj_set_style_bg_opa(g_ctrl_grp, LV_OPA_COVER, 0);
     } else {
         lv_obj_set_style_bg_opa(g_ctrl_grp, LV_OPA_TRANSP, 0);
     }
 
     set_hidden(g_hint_lbl, show);
+    set_hidden(g_ctrl_title, !show);
+    set_hidden(g_ctrl_sub, !show);
+    set_hidden(g_ctrl_status, !show);
+    set_hidden(g_manual_card, !show);
+    set_hidden(g_nav_card, !show);
+    set_hidden(g_danger_card, !show);
 
     /* All interactive items hidden when not showing controls */
-    set_hidden(g_stop_btn, !show || !active);
+    set_hidden(g_stop_btn, !show);
     set_hidden(g_hist_btn,  !show);
     set_hidden(g_sched_btn, !show);
     for (int i = 0; i < 3; i++)
         set_hidden(g_chips[i].btn, !show || active);
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
    PUBLIC API
-═══════════════════════════════════════════════════════════ */
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 void ui_show_splash() {
     g_splash_screen = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(g_splash_screen, lv_color_hex(0x06182Fu), 0);
@@ -767,6 +828,9 @@ void ui_build_dashboard() {
     create_controls_group(g_dash_screen);
     create_duration_picker(g_dash_screen);
     create_toast(g_dash_screen);
+#if UI_CONTROLS_ONLY_DEBUG
+    lv_obj_move_foreground(g_ctrl_grp);
+#endif
 
     update_background();
     update_header();
@@ -789,10 +853,6 @@ void ui_show_toast(const char *text, uint32_t ms) {
     lv_obj_clear_flag(g_toast, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(g_toast);
     g_toast_hide_at = millis() + ms;
-}
-
-void ui_set_snap_busy(bool busy) {
-    (void)busy;
 }
 
 void ui_update_timer_cb(lv_timer_t * /*t*/) {

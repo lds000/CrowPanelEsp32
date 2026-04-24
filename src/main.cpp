@@ -30,14 +30,12 @@
 #include "ota_server.h"
 #endif
 #include "screenshot_serial.h"
-#include "screenshot_sd.h"
 
 /* ── Forward declarations from UI files ──────────────────── */
 void ui_init();
 void ui_set_splash_text(const char *text);
 void ui_build_dashboard();
 void ui_update_timer_cb(lv_timer_t *t);
-void ui_set_snap_busy(bool busy);
 void ui_show_toast(const char *text, uint32_t ms);
 
 /* ── Global state ─────────────────────────────────────────── */
@@ -48,38 +46,6 @@ static const char *WIND_DIRS[8] = {"N","NE","E","SE","S","SW","W","NW"};
 
 static uint32_t g_last_clock_ms  = 0;
 static const uint32_t CTRL_WAKE_MS = 8000;
-
-static void start_screenshot_sd_request() {
-    if (screenshot_sd_start_save_latest()) {
-        Serial.println("[SD] Screenshot save started");
-        Serial0.println("[SD] Screenshot save started");
-    } else {
-        Serial.println("[SD] Screenshot save could not start");
-        Serial0.println("[SD] Screenshot save could not start");
-        ui_show_toast("SD SAVE FAILED", 3000);
-        ui_set_snap_busy(false);
-    }
-    g_pending.type = PENDING_NONE;
-}
-
-static void poll_screenshot_sd_result() {
-    bool ok = false;
-    char path[48] = {};
-    if (!screenshot_sd_poll_result(&ok, path, sizeof(path))) return;
-
-    if (ok) {
-        Serial.printf("[SD] Saved screenshot: %s\n", path);
-        Serial0.printf("[SD] Saved screenshot: %s\n", path);
-        char msg[80];
-        snprintf(msg, sizeof(msg), "SAVED TO SD: %s", path);
-        ui_show_toast(msg, 3000);
-    } else {
-        Serial.println("[SD] Screenshot save failed");
-        Serial0.println("[SD] Screenshot save failed");
-        ui_show_toast("SD SAVE FAILED", 3000);
-    }
-    ui_set_snap_busy(false);
-}
 
 #if APP_MODE == APP_MODE_LIVE
 static WebSocketsClient ws;
@@ -610,13 +576,6 @@ void setup() {
     lcd.setup();
     ui_init();
     lv_timer_handler();
-    if (screenshot_sd_init()) {
-        Serial.println("[SD] TF card ready");
-        Serial0.println("[SD] TF card ready");
-    } else {
-        Serial.println("[SD] TF card not ready");
-        Serial0.println("[SD] TF card not ready");
-    }
 
 #if APP_MODE == APP_MODE_LIVE
     g_state.demo_mode = false;
@@ -713,20 +672,19 @@ void loop() {
     update_demo_state();
 #endif
 
+#if UI_CONTROLS_ONLY_DEBUG
+    g_state.controls_visible = true;
+#else
     g_state.controls_visible = (millis() - g_last_touch_ms) < CTRL_WAKE_MS;
+#endif
     lv_timer_handler();
-    poll_screenshot_sd_result();
 
     if (g_pending.type != PENDING_NONE) {
-        if (g_pending.type == PENDING_SAVE_SCREENSHOT_SD) {
-            start_screenshot_sd_request();
-        } else {
 #if APP_MODE == APP_MODE_LIVE
-            execute_live_action();
+        execute_live_action();
 #else
-            execute_demo_action();
+        execute_demo_action();
 #endif
-        }
     }
 
 #if ENABLE_SCREENSHOT_HTTP

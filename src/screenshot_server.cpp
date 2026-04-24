@@ -25,6 +25,7 @@ static void handle_root() {
     html += F("<h1>LawnBot CrowPanel</h1><p>IP: ");
     html += ip;
     html += F("</p><p><a href=\"/capture.bmp\">Download screen capture (BMP)</a></p>");
+    html += F("<p><a href=\"/wake-controls\">Wake controls</a></p>");
     html += F("<p><small>LVGL snapshot of the active screen</small></p></body></html>");
     g_http->send(200, "text/html", html);
 }
