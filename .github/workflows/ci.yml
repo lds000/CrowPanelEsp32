@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tooling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run native firmware helper tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -Iinclude
+          src/time_helpers.cpp tests/native/test_time_helpers.cpp
+          -o /tmp/crowpanel-time-tests && /tmp/crowpanel-time-tests
+      - run: python -m unittest discover -s tests -v
+      - run: python -m compileall -q tools tests
+      - run: node --check tools/review_ui/app.js
+      - run: python tools/check_tracked_secrets.py
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini', 'partitions.csv') }}
+      - run: pip install --disable-pip-version-check platformio==6.1.18
+      - run: pio run -e crowpanel-7inch-demo
+      - run: python tools/check_firmware_size.py --environment crowpanel-7inch-demo --max-percent 90
+      - run: pio run -e crowpanel-7inch-live-ci
+      - run: python tools/check_firmware_size.py --environment crowpanel-7inch-live-ci --max-percent 90

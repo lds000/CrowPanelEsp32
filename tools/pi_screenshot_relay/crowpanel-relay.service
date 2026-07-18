@@ -1,21 +1,35 @@
 [Unit]
-Description=CrowPanel screenshot relay
+Description=CrowPanel authenticated screenshot cache
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=lds00
-WorkingDirectory=/home/lds00/crowpanel-relay
-Environment=PANEL_HOST=192.168.68.107
-Environment=PANEL_PORT=8080
-Environment=BIND_HOST=0.0.0.0
+DynamicUser=yes
+WorkingDirectory=/opt/crowpanel-relay
+Environment=BIND_HOST=127.0.0.1
 Environment=BIND_PORT=9108
-ExecStart=/usr/bin/python3 /home/lds00/crowpanel-relay/relay.py
+EnvironmentFile=-/etc/crowpanel-relay.env
+ExecStart=/usr/bin/python3 /opt/crowpanel-relay/relay.py
 Restart=on-failure
-RestartSec=3
-StandardOutput=journal
-StandardError=journal
+RestartSec=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+TasksMax=16
+MemoryMax=256M
 
 [Install]
 WantedBy=multi-user.target

@@ -522,6 +522,6 @@ const lv_font_t font_clock_120 = {
     .subpx            = LV_FONT_SUBPX_NONE,
     .underline_position  = -2, .underline_thickness = 1,
     .dsc              = &font_clock_120_dsc,
-    .fallback         = &lv_font_montserrat_48,
+    .fallback         = &lv_font_montserrat_32,
     .user_data        = NULL,
 };

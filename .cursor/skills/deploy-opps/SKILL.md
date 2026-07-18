@@ -1,370 +1,119 @@
 ---
 name: deploy-opps
 description: >-
-  Deploy and verify firmware to the LawnBot CrowPanel ESP32 display, via
-  WiFi OTA (ArduinoOTA + HTTP browser upload) or USB serial. Use when the
-  user wants to flash, upload, OTA, deploy, push firmware, update the
-  CrowPanel, install on a remote/second PC, or troubleshoot an OTA that
-  won't connect, won't authenticate, hangs after auth, or bricked the
-  listener. Encodes the project's known footguns: the OTA env does NOT
-  change firmware contents (only upload transport), include/config.h
-  must be edited to LIVE locally before any deploy (and reverted after),
-  LovyanGFX must stay pinned at 1.1.16 for LVGL 8.4, Tailscale subnet
-  routing breaks ArduinoOTA's UDP+TCP callback (use HTTP OTA instead),
-  ElegantOTA is NOT used, and the device requires a one-time USB flash
-  before WiFi OTA is possible. Read this BEFORE issuing any pio upload
-  command on this project.
+  Build, deploy and verify LawnBot CrowPanel ESP32 firmware over USB,
+  ArduinoOTA or the browser updater without committing private configuration.
 ---
 
-# Deploy Ops — LawnBot CrowPanel
+# Deploy operations
 
-This project flashes an Elecrow CrowPanel 7" (ESP32-S3-WROOM-1-N4R8) over
-either USB serial (CH340) or WiFi OTA. WiFi OTA only works after a
-prerequisite USB flash that contains the OTA listener.
+Read this before uploading. A deployment is complete only after the device
+reboots, reconnects, and the intended version is verified. Building the binary
+is not deployment; it is merely the computer saying it has opinions.
 
-## STOP — read this before issuing any flash command
+## Safety rules
 
-Three misconceptions cause every bricked OTA on this project. If you are
-about to run a `pio run --target upload` and any of these are unfamiliar,
-re-read this section first:
+1. Never put Wi-Fi, controller bearer, OTA, or screenshot credentials in a
+   tracked file or command example.
+2. Copy `include/config_private.example.h` to the ignored
+   `include/config_private.h` and set device-specific values there.
+3. Review `git status --short` and `git diff -- include/config.h platformio.ini`
+   before committing or uploading.
+4. Keep the default known-good dependency environment for field deployments.
+   The `*-next` environments are experiments until hardware-tested.
+5. Do not upload a demo build over OTA to a remote panel: it will stop joining
+   the live network and require USB recovery.
+6. Obtain explicit user authorization immediately before an actual upload.
 
-1. **The `crowpanel-7inch-ota` env does NOT change firmware contents.** It
-   extends `crowpanel-7inch` and overrides only `upload_protocol`,
-   `upload_port`, and `upload_flags`. `APP_MODE`, `WIFI_SSID`,
-   `WIFI_PASSWORD`, `LAWNBOT_HOST`, `ENABLE_OTA`, `ENABLE_SCREENSHOT_HTTP`
-   etc. all come from `include/config.h`, which is committed as
-   `APP_MODE_DEMO` with placeholder WiFi creds (`Guest`/`Healthy!`). To
-   produce a LIVE-mode firmware you **must** edit `include/config.h`
-   locally before building, then revert the edit after upload.
+## Private environment
 
-2. **OTA-pushing a DEMO build will brick the OTA listener.** A DEMO firmware
-   does not connect to your real WiFi and does not start the OTA server. If
-   you push it via OTA, the device reboots into DEMO, drops off the
-   network, and the only way back is a physical USB flash. This is the
-   single most common deploy failure on this project. The fix is always
-   step 1: edit `include/config.h` to LIVE first.
-
-3. **OTA from any LAN host is fine, but transport choice matters.**
-   `crowpanel-7inch-ota` uses ArduinoOTA (UDP/3232 invite + TCP callback).
-   This breaks on hosts where a VPN (Tailscale, NordVPN, etc.) advertises
-   subnet routes for the panel's `192.168.68.0/22` LAN — the device can't
-   TCP back to the host's VPN-side IP. The HTTP browser path
-   (`curl ... /update`) is a single TCP stream initiated by the host and
-   works regardless. **When in doubt, use HTTP OTA.** See "Common issues"
-   §3 for diagnostics.
-
-The OTA stack is `ArduinoOTA` (PIO espota) + `ElegantOTA` for the HTTP
-browser path, both wired up in `src/ota_server.cpp`. The HTTP endpoint
-`/update` is served by ElegantOTA and requires HTTP Basic Auth
-`OTA_USERNAME` / `OTA_PASSWORD` (defaults: `admin` / `lawnbot`).
-
-## Quick reference
-
-| Channel | Endpoint | Use when |
-|---|---|---|
-| USB serial | `pio run -e crowpanel-7inch --target upload --upload-port COM8` | First-time flash, recovery, or device has no OTA listener yet |
-| ArduinoOTA (PIO espota) | `pio run -e crowpanel-7inch-ota --target upload` | Routine WiFi update from a host on the same LAN with no Tailscale subnet shadow |
-| HTTP browser OTA (ElegantOTA) | `curl.exe -u admin:lawnbot -F firmware=@firmware.bin http://192.168.68.107/update` | Routine WiFi update from any host (even with Tailscale interfering); also usable from a phone browser at `http://192.168.68.107/update` |
-
-Device defaults: `192.168.68.107`, hostname `crowpanel.local`, ArduinoOTA UDP port `3232`, HTTP OTA port `80`, OTA username `admin`, OTA password `lawnbot`.
-
-## Pre-flight checklist (always run before flashing)
-
-```
-- [ ] Working tree clean OR you've reviewed every uncommitted change
-- [ ] include/config.h is in LIVE mode with real WiFi creds (locally only — DO NOT COMMIT)
-- [ ] Device pings: `ping -n 2 192.168.68.107`
-- [ ] OTA listener up (only for OTA path): http://192.168.68.107/ returns the OTA page
-- [ ] Firmware binary contains expected strings (build verification step below)
-```
-
-## Step 1 — set the LIVE config locally (never commit)
-
-The committed `include/config.h` ships in `APP_MODE_DEMO` with placeholder
-WiFi credentials so the project stays clean for newcomers. Before any
-deploy, edit it locally to the LIVE values for this device:
-
-```c
-#define APP_MODE       APP_MODE_LIVE
-#define WIFI_SSID      "stolnet2"
-#define WIFI_PASSWORD  "magpie11"
-#define LAWNBOT_HOST   "192.168.68.88"
-```
-
-After the deploy completes, **revert immediately**:
+Set deployment values in the local shell or a private password manager. Do not
+paste their values into logs or chat.
 
 ```powershell
-git checkout -- include/config.h
+$env:CROWPANEL_OTA_PASSWORD = Read-Host 'OTA password'
+$env:CROWPANEL_OTA_HOST = Read-Host 'Panel hostname or IP'
+$env:CROWPANEL_SCREENSHOT_TOKEN = Read-Host 'Screenshot token'
 ```
 
-If you accidentally stage or commit it, scrub it before pushing — the WiFi
-password is plaintext in the binary anyway, but should not be in git.
+The ignored private header should define live mode, Wi-Fi, controller host,
+controller bearer token, and a strong OTA password. Confirm that
+`include/config_private.h` remains ignored:
 
-## Step 2 — build and verify the binary
+```powershell
+git check-ignore include/config_private.h
+```
+
+## Build and inspect
 
 ```powershell
 pio run -e crowpanel-7inch
 ```
 
-Then confirm the built `firmware.bin` contains what you expect. This catches
-"flashed the wrong config" bugs before they brick a remote device:
+Require a successful build, review RAM/flash usage, and run the repository test
+suite before uploading. Never search or print the firmware binary for secret
+strings; that helpfully converts a private value into terminal history.
+
+## Upload options
+
+Use the actual local port/host without committing it.
+
+### USB recovery or first install
 
 ```powershell
-$bytes = [System.IO.File]::ReadAllBytes(".pio\build\crowpanel-7inch\firmware.bin")
-$text  = [System.Text.Encoding]::ASCII.GetString($bytes)
-foreach ($s in @('stolnet2','192.168.68.88','[OTA]','ArduinoOTA','lawnbot')) {
-    "{0,-20} {1}" -f $s, $text.Contains($s)
-}
+pio device list
+pio run -e crowpanel-7inch --target upload --upload-port COMx
 ```
 
-All five must be `True`. If any are `False`, do not flash.
+### ArduinoOTA on the same LAN
 
-## Step 3 — flash
-
-### A. USB serial (first-time, recovery, or no listener yet)
+The OTA environment reads its password from `CROWPANEL_OTA_PASSWORD`:
 
 ```powershell
-pio device list                                         # confirm CH340 on COM8
-pio run -e crowpanel-7inch --target upload --upload-port COM8
+pio run -e crowpanel-7inch-ota --target upload --upload-port panel.lan
 ```
 
-Look for `Hash of data verified.` in the output. The device hard-resets via
-RTS automatically; no buttons needed (the CH340 handles boot mode).
+ArduinoOTA uses a UDP invitation followed by a TCP callback. VPN subnet routes
+can select the wrong callback address; use USB or the HTTP uploader when that
+happens rather than repeatedly hammering the panel.
 
-### B. ArduinoOTA (PIO espota over UDP/TCP, port 3232)
+### Browser HTTP updater
 
-```powershell
-pio run -e crowpanel-7inch-ota --target upload
-```
+Use the authenticated updater in a browser. For command-line uploads, read the
+password interactively and use a protected curl config or another method that
+does not expose it in the command line/process list. HTTP Basic authentication
+does not encrypt traffic, so restrict this to a trusted LAN or encrypted tunnel.
 
-Configured in `platformio.ini` `[env:crowpanel-7inch-ota]`. Auth password
-matches `OTA_PASSWORD` in `include/config.h`.
+## Verification
 
-If this hangs at `Waiting for device...`, see the **Tailscale routing**
-gotcha below — switch to the HTTP path.
+After upload:
 
-### C. HTTP browser upload via ElegantOTA (most reliable from this Windows host)
+- Confirm the device reappears on the expected network.
+- Confirm OTA and authenticated diagnostics respond.
+- Confirm the UI shows fresh hub data, not only Wi-Fi connectivity.
+- Perform a read-only screenshot or serial version check.
+- Do not start/stop irrigation merely to prove a firmware upload unless the user
+  explicitly approved that physical action.
 
-```powershell
-curl.exe -u admin:lawnbot `
-         -F "firmware=@.pio/build/crowpanel-7inch/firmware.bin" `
-         http://192.168.68.107/update --max-time 180
-```
+## Common failures
 
-Or from any browser (phone, laptop): navigate to
-`http://192.168.68.107/update`, enter `admin` / `lawnbot` when the basic-auth
-prompt appears, pick the firmware `.bin`, and submit. ElegantOTA streams
-the upload in chunks so memory pressure on the ESP32-S3 is bounded.
+- **OTA waits after authenticating:** inspect the route to the panel; a VPN may
+  have captured the LAN subnet. Switch transport.
+- **No OTA listener:** use one USB flash with an OTA-capable live build.
+- **Device disappears after OTA:** a demo/private-config mismatch was probably
+  uploaded. Recover by USB with a reviewed live configuration.
+- **Dependency-next build succeeds:** that is not hardware qualification. Test
+  touch, RGB/DMA, screenshots, OTA, rollback and reconnect behavior.
+- **HTTP screenshot returns 401:** set the private diagnostics credential and
+  provide it through `CROWPANEL_SCREENSHOT_TOKEN` to the fetch tool.
 
-Device reboots ~3 seconds after a successful upload.
-
-## Step 4 — verify
-
-```powershell
-ping -n 2 192.168.68.107
-Test-NetConnection 192.168.68.107 -Port 80 -InformationLevel Quiet
-Test-NetConnection 192.168.68.107 -Port 3232 -InformationLevel Quiet
-```
-
-Both ports should return `True`. For build-version verification, the
-ElegantOTA HTTP root at `http://192.168.68.107/` redirects to the upload
-page; the precise build timestamp is best read via the serial monitor
-(USB-only) at boot:
-
-```
-[OTA] ArduinoOTA  — crowpanel.local  (port 3232)
-[OTA] Browser OTA — http://192.168.68.107/update
-```
-
-Or, if `ENABLE_SCREENSHOT_HTTP` is `1` (default since commit `8c19648`),
-fetch a fresh screenshot at `http://192.168.68.107:8080/capture.bmp` and
-visually confirm UI changes shipped.
-
-## Deploying from a different PC (fresh checkout, remote, or hub Pi)
-
-When the deploy is happening from a machine that has never built this
-project before, the workflow is identical to Steps 1-4 above with one
-extra prelude. **Do not assume the OTA env produces a LIVE build on its
-own** — see "STOP" §1 at the top.
-
-```powershell
-git clone https://github.com/lds000/CrowPanelEsp32.git
-cd CrowPanelEsp32
-# 1. Edit include/config.h LOCALLY — APP_MODE_LIVE, real WIFI_SSID/PASSWORD,
-#    real LAWNBOT_HOST. DO NOT COMMIT this edit.
-pio run -e crowpanel-7inch                          # build LIVE firmware
-# 2. Verify the binary contains your real SSID (Step 2 in this doc).
-# 3. Upload — pick ONE based on the host's network situation:
-pio run -e crowpanel-7inch --target upload --upload-port COMx   # USB (most reliable)
-pio run -e crowpanel-7inch-ota --target upload                  # ArduinoOTA (if no VPN subnet shadow)
-curl.exe -u admin:lawnbot -F "firmware=@.pio/build/crowpanel-7inch/firmware.bin" `
-         http://192.168.68.107/update --max-time 180             # HTTP OTA via ElegantOTA (works even with Tailscale)
-# 4. Revert the local config edit immediately.
-git checkout -- include/config.h
-```
-
-**Picking the upload channel from the remote PC:**
-
-| Remote PC situation | Recommended channel |
-|---|---|
-| USB-connected to the panel | USB serial — fastest, no network surprises |
-| On the same LAN, no VPN subnet routes for `192.168.68.0/22` | ArduinoOTA |
-| On the same LAN, but Tailscale/NordVPN/etc. shadows that subnet | HTTP OTA (`curl ... /update`) |
-| Off-LAN, reaching the panel only through Tailscale subnet routing | HTTP OTA via the Tailscale-routed LAN IP |
-
-The Cursor agent on the remote PC will see this skill on `git pull` and
-should consult it before running any `pio ... --target upload` command.
-
-## Common issues and fixes
-
-### 1. Build fails — `lv_font_montserrat_48 undeclared`, `lv_img_dsc_t unknown`
-
-**Cause**: LovyanGFX 1.2.x (especially 1.2.20+) was rewritten against the
-LVGL v9 API. With `lvgl @ ^8.4.0`, the build chain pulls in LovyanGFX's
-`lvgl.h` shim instead of real LVGL.
-
-**Fix (already applied in this repo)**: `platformio.ini` pins
-`lovyan03/LovyanGFX @ 1.1.16`. Do not relax this without also migrating to
-LVGL v9 in `include/lv_conf.h`.
-
-To recover after a stale libdep:
-```powershell
-Remove-Item -Recurse -Force .pio\libdeps,.pio\build
-pio run -e crowpanel-7inch
-```
-
-### 2. Build fails — `undefined reference to ota_server_loop()` in DEMO
-
-**Cause**: `main.cpp` calls `ota_server_loop()` unconditionally, but the
-implementation is gated by `APP_MODE_LIVE && ENABLE_OTA`.
-
-**Fix (already applied)**: `src/ota_server.cpp` provides empty `#else`
-stubs. If you ever extract OTA into a separate module, keep the stubs.
-
-### 3. OTA hangs at `Waiting for device...` after `Authenticating...OK`
-
-**This is per-host, not project-wide.** ArduinoOTA works fine from any LAN
-host whose outbound packets to `192.168.68.107` are sourced from a LAN IP.
-It breaks on hosts where a VPN (Tailscale, NordVPN, ZeroTier, etc.)
-captures the panel's subnet.
-
-**Cause**: `espota.py` sends UDP to the device, the device authenticates,
-then opens a *new TCP back-connection* to the host's source IP. If the
-host has Tailscale and Tailscale advertises subnet routes for the LAN
-(`192.168.68.0/22` with metric 5 vs LAN metric 291), Windows sources
-outbound traffic from `100.87.89.90` (the Tailscale IP). The device tries
-to reach that and can't.
-
-**Hosts known affected**: the development workstation in this project
-(Windows + Tailscale subnet routing).
-**Hosts known clean**: the hub Pi at `192.168.68.88` (LAN-only).
-
-**Verify**:
-```powershell
-Find-NetRoute -RemoteIPAddress 192.168.68.107 |
-  Select InterfaceAlias,IPAddress -First 1
-```
-If `InterfaceAlias` is `Tailscale`, you have the issue.
-
-**Workarounds**:
-- **Use the HTTP browser path instead** (`curl ... /update`) — single TCP
-  stream, works fine over Tailscale.
-- **OTA from another host** without Tailscale subnet routing
-  (e.g. the hub Pi at `192.168.68.88`).
-- **Add a host-specific route** (admin shell) to force Ethernet:
-  `route add 192.168.68.107 mask 255.255.255.255 192.168.68.1 metric 1`
-  then `route delete 192.168.68.107` after.
-- Last resort: temporarily disable Tailscale's "Use Tailscale subnets"
-  setting on this host.
-
-### 4. OTA push fails — `No response from the ESP` on the very first try
-
-**Cause**: the running firmware on the device pre-dates the OTA-server
-commit `5581069`. Port 3232 and port 80 are simply not open.
-
-**Verify**:
-```powershell
-Test-NetConnection 192.168.68.107 -Port 80 -InformationLevel Quiet
-```
-
-**Fix**: USB-flash once via COM8 with the OTA-capable build (Step 3.A).
-After this single USB upload, all future updates can use OTA.
-
-### 5. Device boots but never connects to WiFi (no OTA, no toast)
-
-**Possible causes** (in priority order):
-1. WiFi credentials in `include/config.h` are wrong — most common
-2. SSID is on 5 GHz only — ESP32-S3 is 2.4 GHz only
-3. Router's MAC filter is blocking the device's new MAC (rare; same chip → same MAC)
-4. DHCP exhausted — bounce the router
-
-**Diagnose**: open serial monitor on COM8. Look for `[WiFi] Connecting to <SSID>`
-followed by either `[WiFi] IP: x.x.x.x` (success) or `[WiFi] Connection failed`
-after 60 seconds of dots:
-```powershell
-pio device monitor -e crowpanel-7inch -p COM8 -b 115200
-```
-
-The boot-time WiFi window is 60 s (`connect_wifi()` in `src/main.cpp`).
-If it misses that, `loop()` retries WiFi every 10 s and re-invokes
-`ota_server_init()` when WiFi finally comes up — so the device self-heals
-as long as WiFi ever associates.
-
-> **Regression watch — `ota_server_init` idempotency**
-> Commit `ffd422e` added a `static bool s_initialized` guard so repeated
-> calls (from the WiFi reconnect path in `loop()`) were no-ops. Commit
-> `8c19648` (ElegantOTA migration) inadvertently dropped that guard. If
-> the device ever loses WiFi and reconnects, `ArduinoOTA.begin()`,
-> `ElegantOTA.begin()`, and `g_ota_http.begin()` all re-run, which on
-> some Arduino-ESP32 versions can leak handlers or assert. **If you
-> touch `src/ota_server.cpp`, restore the guard:**
-> ```cpp
-> void ota_server_init() {
->     static bool s_initialized = false;
->     if (s_initialized) return;
->     s_initialized = true;
->     /* ... */
-> }
-> ```
-
-### 6. HTTP OTA upload aborts mid-stream with `Recv failure: Connection was reset`
-
-**Symptoms**: curl shows partial transfer, then `(56) Recv failure`. Device
-is still alive (HTTP page still serves).
-
-**Causes**:
-- Tailscale path glitch (long-running TCP through the relay drops)
-- Heap exhaustion on device (unlikely — Update streams to flash)
-- WiFi packet loss
-
-**Fix**: just retry. The `Update` API on the device rolls back on aborted
-writes — you cannot brick the device this way. If it fails repeatedly:
-1. Switch host (try OTA from the hub Pi)
-2. Move the device closer to the AP
-3. Reduce upload size (rarely needed; 1.8 MB easily fits)
-
-### 7. Device pingable but every TCP service is closed
-
-You are likely running the *previous* (pre-OTA-commit) firmware. See
-issue 4 — USB-flash once.
-
-If USB-flashing also fails (`pio device list` shows no CH340), the device
-may have crashed into a boot loop. Power-cycle it via the USB cable.
-
-## Footgun reminders
-
-- **Never commit `include/config.h` with real credentials.** `git diff include/config.h` before every commit when working on deploy-related code.
-- **Don't push the OTA env to a device whose committed config is DEMO** — the device will boot, fail to find the placeholder WiFi (`Guest`/`Healthy!` in `include/config.h`), and lose its OTA listener until USB recovery.
-- **Don't bump LovyanGFX past 1.1.16** until you've also migrated `lv_conf.h` to LVGL 9 — see issue 1.
-- **`pio run --target upload` without `--upload-port`** auto-detects the serial port. Fine when only the CH340 is connected, ambiguous otherwise. Always pass `--upload-port COM8` for USB flashes when other USB-serial devices are plugged in.
-
-## File map
+## Relevant files
 
 | Path | Purpose |
 |---|---|
-| `platformio.ini` | Build envs (`crowpanel-7inch`, `crowpanel-7inch-ota`) and dep pins |
-| `include/config.h` | WiFi creds, APP_MODE, OTA password — **secrets**, do not commit edits |
-| `include/lv_conf.h` | LVGL 8.4 config — must match installed LVGL major version |
-| `src/main.cpp` | `connect_wifi()` (60 s window), reconnect loop, `ota_server_init()` re-call |
-| `src/ota_server.cpp` | ArduinoOTA + ElegantOTA at `/update` (basic auth `admin`/`lawnbot`) |
-| `partitions.csv` | App partition is 3 MB; current build uses ~58% |
+| `platformio.ini` | Known-good, OTA, demo and staged build environments |
+| `include/config.h` | Safe tracked defaults |
+| `include/config_private.example.h` | Template for ignored device settings |
+| `src/ota_server.cpp` | ArduinoOTA and browser update server |
+| `src/screenshot_server.cpp` | Authenticated diagnostic capture endpoint |
+| `partitions.csv` | OTA application/rollback layout |

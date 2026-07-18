@@ -19,6 +19,11 @@
 #define SCREEN_W 800
 #define SCREEN_H 480
 
+/* UI freshness thresholds.  A disconnected panel should look disconnected,
+   not confidently recite yesterday's state like a tiny blue politician. */
+#define UI_STATUS_STALE_MS  30000UL
+#define UI_WEATHER_STALE_MS 60000UL
+
 /* Zone names — must match FastAPI route paths (URL-encoded separately) */
 static const char * const ZONE_API_NAMES[3]     = {"Hanging Pots", "Garden", "Misters"};
 static const char * const ZONE_DISPLAY_NAMES[3] = {"HANGING POTS", "GARDEN",  "MISTERS"};

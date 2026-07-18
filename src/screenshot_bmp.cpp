@@ -58,6 +58,11 @@ bool screenshot_bmp_capture(uint8_t **out_buf, uint32_t *out_size) {
         return false;
     }
 
+    if (!framebuffer_lock(500)) {
+        heap_caps_free(bmp);
+        return false;
+    }
+
     memset(bmp, 0, fileSize);
 
     bmp[0] = 'B';
@@ -89,6 +94,8 @@ bool screenshot_bmp_capture(uint8_t **out_buf, uint32_t *out_size) {
         }
         if ((y & 31) == 31) delay(1);
     }
+
+    framebuffer_unlock();
 
     *out_buf  = bmp;
     *out_size = fileSize;

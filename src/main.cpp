@@ -18,10 +18,14 @@
 #include <HTTPClient.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 #endif
 
 #include "app_state.h"
 #include "lgfx.h"
+#include "time_helpers.h"
 
 #if ENABLE_SCREENSHOT_HTTP
 #include "screenshot_server.h"
@@ -30,12 +34,16 @@
 #include "ota_server.h"
 #endif
 #include "screenshot_serial.h"
+#if ENABLE_SCREENSHOT_SD
+#include "screenshot_sd.h"
+#endif
 
 /* ── Forward declarations from UI files ──────────────────── */
 void ui_init();
 void ui_set_splash_text(const char *text);
 void ui_build_dashboard();
 void ui_update_timer_cb(lv_timer_t *t);
+void ui_set_snap_busy(bool busy);
 void ui_show_toast(const char *text, uint32_t ms);
 
 /* ── Global state ─────────────────────────────────────────── */
@@ -47,10 +55,95 @@ static const char *WIND_DIRS[8] = {"N","NE","E","SE","S","SW","W","NW"};
 static uint32_t g_last_clock_ms  = 0;
 static const uint32_t CTRL_WAKE_MS = 8000;
 
+#if ENABLE_SCREENSHOT_SD
+static void start_screenshot_sd_request() {
+    if (screenshot_sd_start_save_latest()) {
+        Serial.println("[SD] Screenshot save started");
+        Serial0.println("[SD] Screenshot save started");
+    } else {
+        Serial.println("[SD] Screenshot save could not start");
+        Serial0.println("[SD] Screenshot save could not start");
+        ui_show_toast("SD SAVE FAILED", 3000);
+        ui_set_snap_busy(false);
+    }
+    g_pending.type = PENDING_NONE;
+}
+
+static void poll_screenshot_sd_result() {
+    bool ok = false;
+    char path[48] = {};
+    if (!screenshot_sd_poll_result(&ok, path, sizeof(path))) return;
+
+    if (ok) {
+        Serial.printf("[SD] Saved screenshot: %s\n", path);
+        Serial0.printf("[SD] Saved screenshot: %s\n", path);
+        char msg[80];
+        snprintf(msg, sizeof(msg), "SAVED TO SD: %s", path);
+        ui_show_toast(msg, 3000);
+    } else {
+        Serial.println("[SD] Screenshot save failed");
+        Serial0.println("[SD] Screenshot save failed");
+        ui_show_toast("SD SAVE FAILED", 3000);
+    }
+    ui_set_snap_busy(false);
+}
+#endif
+
 #if APP_MODE == APP_MODE_LIVE
 static WebSocketsClient ws;
 static uint32_t g_last_sensor_ms  = 0;
 static uint32_t g_last_hist_fetch = 0;
+/* The full schedule is retained so edits can be applied without discarding
+ * fields or zone sets this compact UI does not display. */
+static String   g_schedule_source_json;
+static String   g_pending_save_body;
+static String   g_pending_save_source;
+
+enum NetOperation : uint8_t {
+    NET_GET_SENSORS,
+    NET_GET_SCHEDULE,
+    NET_GET_HISTORY,
+    NET_RUN_ZONE,
+    NET_STOP_ALL,
+    NET_SAVE_PREFLIGHT,
+    NET_PUT_SCHEDULE
+};
+
+enum NetResultError : uint8_t {
+    NET_RESULT_OK,
+    NET_RESULT_WIFI_DOWN,
+    NET_RESULT_BODY_TOO_LARGE,
+    NET_RESULT_OUT_OF_MEMORY,
+    NET_RESULT_READ_FAILED,
+    NET_RESULT_CANCELLED_BY_STOP
+};
+
+struct NetRequest {
+    NetOperation op;
+    PendingType action;
+    bool report_action;
+    char zone_name[32];
+    int run_minutes;
+    char *payload;
+    size_t payload_len;
+};
+
+struct NetResult {
+    NetOperation op;
+    PendingType action;
+    bool report_action;
+    int http_code;
+    NetResultError error;
+    char *body;
+    size_t body_len;
+};
+
+static QueueHandle_t g_net_request_queue = nullptr;
+static QueueHandle_t g_net_result_queue = nullptr;
+static TaskHandle_t  g_net_worker_task = nullptr;
+static uint32_t      g_pending_action_mask = 0;
+static volatile uint32_t g_cancelled_action_mask = 0;
+static bool          g_sensor_request_pending = false;
 #else
 /* ── Demo state ──────────────────────────────────────────── */
 static time_t   g_demo_epoch_base           = DEMO_START_EPOCH;
@@ -95,13 +188,20 @@ static void set_next_run(time_t ep, const char *zone) {
     strftime(g_state.next_run.date_str, sizeof(g_state.next_run.date_str), "%Y-%m-%d", &ti);
 }
 
-/* Compute today's 14-day schedule index anchored to 2024-01-01 */
+static bool set_next_run_time_text(const char *text) {
+    return lawnbot_time::parse_next_run_time_text(
+        text, g_state.next_run.time_str, sizeof(g_state.next_run.time_str),
+        g_state.next_run.date_str, sizeof(g_state.next_run.date_str));
+}
+
+/* Compute today's 14-day schedule index anchored to local 2024-01-01. */
 static int calc_today_sched_idx(time_t now_ep) {
-    struct tm anchor_tm = {};
-    anchor_tm.tm_year = 124; anchor_tm.tm_mon = 0; anchor_tm.tm_mday = 1;
-    time_t anchor = mktime(&anchor_tm);
-    int days = (int)((now_ep - anchor) / 86400);
-    return ((days % SCHED_DAYS) + SCHED_DAYS) % SCHED_DAYS;
+    struct tm local = {};
+    localtime_r(&now_ep, &local);
+    const int index = lawnbot_time::schedule_index_for_civil_date(
+        local.tm_year + 1900, static_cast<unsigned>(local.tm_mon + 1),
+        static_cast<unsigned>(local.tm_mday), SCHED_DAYS);
+    return index >= 0 ? index : 0;
 }
 
 #if APP_MODE == APP_MODE_LIVE
@@ -109,12 +209,257 @@ static int calc_today_sched_idx(time_t now_ep) {
    LIVE MODE — parsing & HTTP helpers
 ═══════════════════════════════════════════════════════════ */
 
-static void parse_ws_status(const char *json, size_t len) {
+static bool http_success(int code) {
+    return code >= 200 && code < 300;
+}
+
+static bool bearer_token_configured() {
+    return LAWNBOT_API_BEARER_TOKEN[0] != '\0';
+}
+
+static bool add_control_auth(HTTPClient &http) {
+    if (!bearer_token_configured()) return false;
+    String value = F("Bearer ");
+    value += LAWNBOT_API_BEARER_TOKEN;
+    http.addHeader("Authorization", value);
+    return true;
+}
+
+static void begin_action(PendingType type, const char *message) {
+    g_state.action.busy = true;
+    g_state.action.success = false;
+    g_state.action.type = type;
+    g_state.action.http_code = 0;
+    g_state.action.completed_ms = 0;
+    strlcpy(g_state.action.message, message ? message : "WORKING", sizeof(g_state.action.message));
+}
+
+static void finish_action(PendingType type, bool success, int code, const char *message) {
+    g_state.action.busy = false;
+    g_state.action.success = success;
+    g_state.action.type = type;
+    g_state.action.http_code = code;
+    g_state.action.completed_ms = millis();
+    strlcpy(g_state.action.message, message ? message : (success ? "OK" : "FAILED"),
+            sizeof(g_state.action.message));
+}
+
+static String url_encode_path_segment(const char *value) {
+    static const char HEX_DIGITS[] = "0123456789ABCDEF";
+    String encoded;
+    if (!value) return encoded;
+    encoded.reserve(strlen(value) * 3U);
+    for (const uint8_t *p = reinterpret_cast<const uint8_t *>(value); *p; ++p) {
+        const uint8_t c = *p;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~') {
+            encoded += static_cast<char>(c);
+        } else {
+            encoded += '%';
+            encoded += HEX_DIGITS[c >> 4];
+            encoded += HEX_DIGITS[c & 0x0F];
+        }
+    }
+    return encoded;
+}
+
+static void invalidate_live_status() {
+    clear_relays();
+    g_state.current_run = {};
+    g_state.next_run = {};
+    g_state.status_updated_ms = 0;
+}
+
+static bool canonical_schedule_source(const char *json, size_t len, String &source) {
+    if (!json || len == 0 || len > LAWNBOT_MAX_SCHEDULE_JSON_BYTES) return false;
     JsonDocument doc;
-    if (deserializeJson(doc, json, len) != DeserializationError::Ok) return;
-    if (strcmp(doc["type"] | "", "status") != 0) return;
+    if (deserializeJson(doc, json, len) != DeserializationError::Ok ||
+        !doc.is<JsonObject>()) return false;
+    JsonObject root = doc.as<JsonObject>();
+    JsonObject sched = root["schedule"].is<JsonObject>()
+                     ? root["schedule"].as<JsonObject>() : root;
+    if (!sched["schedule_days"].is<JsonArray>() || !sched["start_times"].is<JsonArray>())
+        return false;
+    const size_t size = measureJson(sched);
+    if (size == 0 || size > LAWNBOT_MAX_SCHEDULE_JSON_BYTES) return false;
+    source = "";
+    source.reserve(size + 1U);
+    return serializeJson(sched, source) == size;
+}
+
+class BoundedResponseStream : public Stream {
+public:
+    BoundedResponseStream(char *buffer, size_t capacity)
+        : buffer_(buffer), capacity_(capacity) {}
+
+    size_t write(uint8_t value) override {
+        return write(&value, 1);
+    }
+
+    size_t write(const uint8_t *data, size_t size) override {
+        if (!data || size == 0) return 0;
+        if (length_ + size > capacity_) {
+            overflowed_ = true;
+            return 0;
+        }
+        memcpy(buffer_ + length_, data, size);
+        length_ += size;
+        return size;
+    }
+
+    int available() override { return 0; }
+    int read() override { return -1; }
+    int peek() override { return -1; }
+    void flush() override {}
+
+    size_t length() const { return length_; }
+    bool overflowed() const { return overflowed_; }
+
+private:
+    char *buffer_ = nullptr;
+    size_t capacity_ = 0;
+    size_t length_ = 0;
+    bool overflowed_ = false;
+};
+
+static bool worker_read_body(HTTPClient &http, size_t max_bytes, NetResult &result) {
+    const int announced = http.getSize();
+    if (announced > 0 && static_cast<size_t>(announced) > max_bytes) {
+        result.error = NET_RESULT_BODY_TOO_LARGE;
+        return false;
+    }
+
+    const size_t capacity = announced > 0 ? static_cast<size_t>(announced) : max_bytes;
+    char *buffer = static_cast<char *>(malloc(capacity + 1U));
+    if (!buffer) {
+        result.error = NET_RESULT_OUT_OF_MEMORY;
+        return false;
+    }
+
+    BoundedResponseStream sink(buffer, capacity);
+    const int written = http.writeToStream(&sink);
+    if (sink.overflowed()) {
+        free(buffer);
+        result.error = NET_RESULT_BODY_TOO_LARGE;
+        return false;
+    }
+    if (written < 0) {
+        free(buffer);
+        result.error = NET_RESULT_READ_FAILED;
+        return false;
+    }
+
+    buffer[sink.length()] = '\0';
+    result.body = buffer;
+    result.body_len = sink.length();
+    return true;
+}
+
+static void network_worker(void * /*parameter*/) {
+    NetRequest request = {};
+    for (;;) {
+        if (xQueueReceive(g_net_request_queue, &request, portMAX_DELAY) != pdTRUE) continue;
+
+        NetResult result = {};
+        result.op = request.op;
+        result.action = request.action;
+        result.report_action = request.report_action;
+
+        if (request.action != PENDING_NONE &&
+            (g_cancelled_action_mask & (1UL << static_cast<unsigned>(request.action))) != 0) {
+            result.error = NET_RESULT_CANCELLED_BY_STOP;
+        } else if (WiFi.status() != WL_CONNECTED) {
+            result.error = NET_RESULT_WIFI_DOWN;
+        } else {
+            HTTPClient http;
+            http.setTimeout(request.op == NET_GET_SENSORS ? 3500 : 6000);
+            String url;
+
+            switch (request.op) {
+                case NET_GET_SENSORS:
+                    http.begin(LAWNBOT_API_BASE "/sensors/latest");
+                    result.http_code = http.GET();
+                    if (http_success(result.http_code)) worker_read_body(http, 8192, result);
+                    break;
+
+                case NET_GET_SCHEDULE:
+                case NET_SAVE_PREFLIGHT:
+                    http.begin(String(LAWNBOT_API_BASE) + "/schedule");
+                    result.http_code = http.GET();
+                    if (http_success(result.http_code))
+                        worker_read_body(http, LAWNBOT_MAX_SCHEDULE_JSON_BYTES, result);
+                    break;
+
+                case NET_GET_HISTORY:
+                    http.begin(String(LAWNBOT_API_BASE) + "/history?limit=14");
+                    result.http_code = http.GET();
+                    if (http_success(result.http_code))
+                        worker_read_body(http, LAWNBOT_MAX_HISTORY_JSON_BYTES, result);
+                    break;
+
+                case NET_RUN_ZONE: {
+                    url = String(LAWNBOT_API_BASE) + "/zones/"
+                        + url_encode_path_segment(request.zone_name) + "/run";
+                    http.begin(url);
+                    http.addHeader("Content-Type", "application/json");
+                    add_control_auth(http);
+                    char body[64];
+                    snprintf(body, sizeof(body), "{\"duration_minutes\":%d}",
+                             request.run_minutes);
+                    result.http_code = http.POST(body);
+                    break;
+                }
+
+                case NET_STOP_ALL:
+                    http.begin(String(LAWNBOT_API_BASE) + "/stop-all");
+                    http.addHeader("Content-Type", "application/json");
+                    add_control_auth(http);
+                    result.http_code = http.POST("");
+                    break;
+
+                case NET_PUT_SCHEDULE:
+                    http.begin(String(LAWNBOT_API_BASE) + "/schedule");
+                    http.addHeader("Content-Type", "application/json");
+                    add_control_auth(http);
+                    result.http_code = http.PUT(
+                        reinterpret_cast<uint8_t *>(request.payload), request.payload_len);
+                    break;
+            }
+            http.end();
+        }
+
+        if (request.payload) {
+            free(request.payload);
+            request.payload = nullptr;
+        }
+        xQueueSend(g_net_result_queue, &result, portMAX_DELAY);
+    }
+}
+
+static bool network_worker_init() {
+    g_net_request_queue = xQueueCreate(6, sizeof(NetRequest));
+    g_net_result_queue = xQueueCreate(6, sizeof(NetResult));
+    if (!g_net_request_queue || !g_net_result_queue ||
+        xTaskCreatePinnedToCore(network_worker, "lawn-http", 8192, nullptr, 1,
+                                &g_net_worker_task, 0) != pdPASS) {
+        if (g_net_request_queue) vQueueDelete(g_net_request_queue);
+        if (g_net_result_queue) vQueueDelete(g_net_result_queue);
+        g_net_request_queue = nullptr;
+        g_net_result_queue = nullptr;
+        g_net_worker_task = nullptr;
+        return false;
+    }
+    return true;
+}
+
+static bool parse_ws_status(const char *json, size_t len) {
+    if (!json || len == 0 || len > LAWNBOT_MAX_WS_JSON_BYTES) return false;
+    JsonDocument doc;
+    if (deserializeJson(doc, json, len) != DeserializationError::Ok) return false;
+    if (strcmp(doc["type"] | "", "status") != 0) return false;
 
     JsonObject data = doc["data"];
+    if (data.isNull() || !data["zone_states"].is<JsonArray>()) return false;
 
     /* zone_states array */
     JsonArray zones = data["zone_states"];
@@ -145,194 +490,585 @@ static void parse_ws_status(const char *json, size_t len) {
     if (next.isNull() || !next.is<JsonObject>()) {
         g_state.next_run.valid = false;
     } else {
-        g_state.next_run.valid = true;
         const char *zn = next["set_name"] | (next["name"] | "");
         strlcpy(g_state.next_run.zone, zn, sizeof(g_state.next_run.zone));
         const char *t = next["scheduled_time"] | (next["time"] | "");
-        strlcpy(g_state.next_run.time_str, t, sizeof(g_state.next_run.time_str));
+        g_state.next_run.valid = set_next_run_time_text(t);
     }
 
     /* Update today's schedule index from status */
     int day_idx = data["schedule_day_index"] | -1;
-    if (day_idx >= 0) g_state.schedule.today_idx = day_idx;
+    if (day_idx >= 0 && day_idx < SCHED_DAYS) g_state.schedule.today_idx = day_idx;
+    g_state.status_updated_ms = millis();
+    return true;
 }
 
-static void parse_schedule(const char *json) {
+static bool parse_schedule(const char *json, size_t len) {
+    if (!json || len == 0 || len > LAWNBOT_MAX_SCHEDULE_JSON_BYTES) return false;
+
     JsonDocument doc;
-    if (deserializeJson(doc, json) != DeserializationError::Ok) return;
+    if (deserializeJson(doc, json, len) != DeserializationError::Ok ||
+        !doc.is<JsonObject>()) return false;
 
-    const JsonObject &sched = doc.as<JsonObject>().containsKey("schedule_days")
-                              ? doc.as<JsonObject>()
-                              : doc["schedule"].as<JsonObject>();
+    JsonObject root = doc.as<JsonObject>();
+    JsonObject sched = root["schedule"].is<JsonObject>()
+                     ? root["schedule"].as<JsonObject>() : root;
+    JsonArray days = sched["schedule_days"].as<JsonArray>();
+    JsonArray slots = sched["start_times"].as<JsonArray>();
+    if (days.isNull() || days.size() != SCHED_DAYS || slots.isNull()) return false;
 
-    JsonArray days = sched["schedule_days"];
-    if (!days.isNull()) {
-        int n = 0;
-        for (bool d : days) {
-            if (n < SCHED_DAYS) g_state.schedule.days[n++] = d;
-        }
+    ScheduleData parsed = {};
+    parsed.today_idx = g_state.schedule.today_idx;
+    int day_index = 0;
+    for (JsonVariant day : days) {
+        if (!day.is<bool>()) return false;
+        parsed.days[day_index++] = day.as<bool>();
     }
 
-    JsonArray slots = sched["start_times"];
-    g_state.schedule.num_slots = 0;
+    const size_t source_slots = slots.size();
+    parsed.source_num_slots = static_cast<uint8_t>(source_slots > 255 ? 255 : source_slots);
+    parsed.truncated = source_slots > SCHED_MAX_SLOTS;
+
     for (JsonObject slot : slots) {
-        if (g_state.schedule.num_slots >= SCHED_MAX_SLOTS) break;
-        SchedSlot &s = g_state.schedule.slots[g_state.schedule.num_slots];
-        strlcpy(s.time_str, slot["time"] | "", sizeof(s.time_str));
-        s.enabled   = slot["enabled"] | true;
-        s.num_zones = 0;
-        JsonArray sets = slot["sets"];
+        if (parsed.num_slots >= SCHED_MAX_SLOTS) break;
+        const char *time_text = slot["time"] | "";
+        if (!time_text[0]) return false;
+
+        SchedSlot &target = parsed.slots[parsed.num_slots];
+        strlcpy(target.time_str, time_text, sizeof(target.time_str));
+        target.enabled = slot["enabled"] | true;
+        JsonArray sets = slot["sets"].as<JsonArray>();
+        if (sets.isNull()) return false;
+        if (sets.size() > 3) parsed.truncated = true;
         for (JsonObject set : sets) {
-            if (s.num_zones >= 3) break;
-            SchedZone &z = s.zones[s.num_zones];
-            strlcpy(z.name, set["name"] | "", sizeof(z.name));
-            z.duration_min = set["duration_minutes"] | 0.0f;
-            z.enabled      = set["enabled"] | true;
-            s.num_zones++;
+            if (target.num_zones >= 3) break;
+            const char *name = set["name"] | "";
+            if (!name[0]) return false;
+            SchedZone &zone = target.zones[target.num_zones++];
+            strlcpy(zone.name, name, sizeof(zone.name));
+            zone.duration_min = set["duration_minutes"] | 0.0f;
+            zone.enabled = set["enabled"] | true;
         }
-        g_state.schedule.num_slots++;
+        parsed.num_slots++;
     }
 
-    g_state.schedule.valid       = true;
-    g_state.schedule.days_dirty  = false;
-    g_state.data_loading         = false;
+    String preserved;
+    if (!canonical_schedule_source(json, len, preserved)) return false;
+
+    parsed.valid = true;
+    parsed.days_dirty = false;
+    parsed.save_supported = true;
+    parsed.updated_ms = millis();
+    g_schedule_source_json = preserved;
+    g_state.schedule = parsed;
+    return true;
 }
 
-static void parse_history(const char *json) {
+static bool parse_history(const char *json, size_t len) {
+    if (!json || len == 0 || len > LAWNBOT_MAX_HISTORY_JSON_BYTES) return false;
     JsonDocument doc;
-    if (deserializeJson(doc, json) != DeserializationError::Ok) return;
+    if (deserializeJson(doc, json, len) != DeserializationError::Ok ||
+        !doc.is<JsonArray>()) return false;
 
-    JsonArray arr = doc.as<JsonArray>();
-    g_state.history.count = 0;
-    for (JsonObject entry : arr) {
-        if (g_state.history.count >= HIST_MAX) break;
-        HistEntry &e = g_state.history.entries[g_state.history.count];
+    HistData parsed = {};
+    for (JsonObject entry : doc.as<JsonArray>()) {
+        if (parsed.count >= HIST_MAX) break;
         const char *zn = entry["set_name"] | (entry["name"] | "");
-        strlcpy(e.zone,       zn,                   sizeof(e.zone));
-        strlcpy(e.start_iso,  entry["start_time"] | "", sizeof(e.start_iso));
+        const char *start = entry["start_time"] | "";
+        if (!zn[0] || !start[0]) continue;
+        HistEntry &e = parsed.entries[parsed.count++];
+        strlcpy(e.zone, zn, sizeof(e.zone));
+        strlcpy(e.start_iso, start, sizeof(e.start_iso));
         e.duration_sec = entry["duration_seconds"] | 0;
-        e.is_manual    = entry["is_manual"]  | false;
-        e.completed    = entry["completed"]  | true;
-        g_state.history.count++;
+        e.is_manual = entry["is_manual"] | false;
+        e.completed = entry["completed"] | true;
     }
-    g_state.history.valid = true;
-    g_state.data_loading  = false;
+    parsed.valid = true;
+    parsed.updated_ms = millis();
+    g_state.history = parsed;
+    return true;
 }
 
-static String build_schedule_put_body() {
+/* Apply only fields the panel edits to the full fetched schedule.  Every
+ * unknown setting and every hidden zone set survives byte-for-byte semantically. */
+static bool build_schedule_put_body(String &body, String &updated_source,
+                                    char *error, size_t error_size) {
+    if (!g_state.schedule.save_supported || g_schedule_source_json.isEmpty()) {
+        strlcpy(error, "REFRESH SCHEDULE BEFORE SAVING", error_size);
+        return false;
+    }
+
     JsonDocument doc;
-    JsonObject sched = doc["schedule"].to<JsonObject>();
-    JsonArray days = sched["schedule_days"].to<JsonArray>();
-    for (int i = 0; i < SCHED_DAYS; i++) days.add(g_state.schedule.days[i]);
+    if (deserializeJson(doc, g_schedule_source_json) != DeserializationError::Ok ||
+        !doc.is<JsonObject>()) {
+        strlcpy(error, "SCHEDULE SOURCE IS INVALID", error_size);
+        return false;
+    }
+    JsonObject sched = doc.as<JsonObject>();
+    JsonArray days = sched["schedule_days"].as<JsonArray>();
+    JsonArray slots = sched["start_times"].as<JsonArray>();
+    if (days.size() != SCHED_DAYS || slots.isNull()) {
+        strlcpy(error, "SCHEDULE SCHEMA CHANGED; REFRESH REQUIRED", error_size);
+        return false;
+    }
 
-    JsonArray slots = sched["start_times"].to<JsonArray>();
-    for (int s = 0; s < g_state.schedule.num_slots; s++) {
-        const SchedSlot &slot = g_state.schedule.slots[s];
-        JsonObject o = slots.add<JsonObject>();
-        o["time"]    = slot.time_str;
-        o["enabled"] = slot.enabled;
-        JsonArray sets = o["sets"].to<JsonArray>();
-        for (int z = 0; z < slot.num_zones; z++) {
-            JsonObject zo = sets.add<JsonObject>();
-            zo["name"]             = slot.zones[z].name;
-            zo["duration_minutes"] = slot.zones[z].duration_min;
-            zo["enabled"]          = slot.zones[z].enabled;
-            zo["mode"]             = "normal";
+    const int visible_source_slots = static_cast<int>(slots.size() > SCHED_MAX_SLOTS
+                                    ? SCHED_MAX_SLOTS : slots.size());
+    if (g_state.schedule.num_slots < visible_source_slots ||
+        (slots.size() > SCHED_MAX_SLOTS && g_state.schedule.num_slots != SCHED_MAX_SLOTS)) {
+        strlcpy(error, "UNSUPPORTED SCHEDULE STRUCTURE CHANGE", error_size);
+        return false;
+    }
+
+    for (int i = 0; i < SCHED_DAYS; ++i) days[i].set(g_state.schedule.days[i]);
+    for (int i = 0; i < visible_source_slots; ++i) {
+        JsonObject slot = slots[i].as<JsonObject>();
+        slot["time"] = g_state.schedule.slots[i].time_str;
+        slot["enabled"] = g_state.schedule.slots[i].enabled;
+    }
+
+    /* New times clone the complete first source slot, including hidden sets.
+     * Refuse if there is no lossless template instead of inventing a partial one. */
+    if (g_state.schedule.num_slots > static_cast<int>(slots.size())) {
+        if (slots.isNull() || slots.size() == 0) {
+            strlcpy(error, "CANNOT ADD FIRST SLOT SAFELY", error_size);
+            return false;
+        }
+        JsonDocument template_doc;
+        template_doc.set(slots[0]);
+        for (int i = static_cast<int>(slots.size()); i < g_state.schedule.num_slots; ++i) {
+            JsonObject added = slots.add<JsonObject>();
+            added.set(template_doc.as<JsonObject>());
+            added["time"] = g_state.schedule.slots[i].time_str;
+            added["enabled"] = g_state.schedule.slots[i].enabled;
         }
     }
-    String body;
-    serializeJson(doc, body);
-    return body;
+
+    const size_t source_size = measureJson(doc);
+    if (source_size == 0 || source_size > LAWNBOT_MAX_SCHEDULE_JSON_BYTES) {
+        strlcpy(error, "UPDATED SCHEDULE IS TOO LARGE", error_size);
+        return false;
+    }
+    updated_source = "";
+    updated_source.reserve(source_size + 1U);
+    serializeJson(doc, updated_source);
+    body = F("{\"schedule\":");
+    body.reserve(updated_source.length() + 14U);
+    body += updated_source;
+    body += '}';
+    return true;
 }
 
-static void poll_sensors() {
-    HTTPClient http;
-    http.setTimeout(5000);
-    http.begin(LAWNBOT_API_BASE "/sensors/latest");
-    if (http.GET() == 200) {
-        JsonDocument doc;
-        if (deserializeJson(doc, http.getString()) == DeserializationError::Ok) {
-            JsonObject env = doc["environment"];
-            if (!env.isNull()) {
-                float tc = env["temperature_c"] | -999.0f;
-                if (tc > -999.0f) {
-                    g_state.weather.valid        = true;
-                    g_state.weather.temp_f       = tc * 9.0f / 5.0f + 32.0f;
-                    g_state.weather.humidity_pct = env["humidity_percent"] | 0.0f;
-                    g_state.weather.wind_mph     = (env["wind_speed_ms"] | 0.0f) * 2.23694f;
-                    strlcpy(g_state.weather.wind_dir,
-                            env["wind_direction_compass"] | "--",
-                            sizeof(g_state.weather.wind_dir));
-                }
+static bool bounded_json_float(JsonVariant value, float minimum, float maximum,
+                               float &output) {
+    if (value.isNull() || !value.is<float>()) return false;
+    const float parsed = value.as<float>();
+    if (!isfinite(parsed) || parsed < minimum || parsed > maximum) return false;
+    output = parsed;
+    return true;
+}
+
+static bool parse_sensors(const char *json, size_t len) {
+    if (!json || len == 0 || len > 8192) return false;
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, json, len);
+    if (err != DeserializationError::Ok) {
+        Serial.printf("[JSON] Sensor parse failed: %s\n", err.c_str());
+        return false;
+    }
+    bool any_valid = false;
+    JsonObject env = doc["environment"];
+    if (!env.isNull()) {
+        WeatherData parsed = {};
+        float tc = 0.0f;
+        parsed.temp_valid = bounded_json_float(env["temperature_c"], -80.0f, 80.0f, tc);
+        if (parsed.temp_valid)
+            parsed.temp_f = tc * 9.0f / 5.0f + 32.0f;
+        parsed.humidity_valid = bounded_json_float(env["humidity_percent"], 0.0f, 100.0f,
+                                                   parsed.humidity_pct);
+        float wind_ms = 0.0f;
+        parsed.wind_speed_valid = bounded_json_float(env["wind_speed_ms"], 0.0f, 150.0f,
+                                                     wind_ms);
+        if (parsed.wind_speed_valid) parsed.wind_mph = wind_ms * 2.23694f;
+        const char *wind_dir = env["wind_direction_compass"] | "";
+        parsed.wind_direction_valid = wind_dir[0] && strcmp(wind_dir, "--") != 0 &&
+                                      strlen(wind_dir) < sizeof(parsed.wind_dir);
+        if (parsed.wind_direction_valid)
+            strlcpy(parsed.wind_dir, wind_dir, sizeof(parsed.wind_dir));
+        parsed.valid = parsed.temp_valid || parsed.humidity_valid ||
+                       parsed.wind_speed_valid || parsed.wind_direction_valid;
+        if (parsed.valid) {
+            g_state.weather = parsed;
+            g_state.weather_updated_ms = millis();
+            any_valid = true;
+        }
+    }
+
+    JsonObject flow = doc["flow_pressure"];
+    if (!flow.isNull()) {
+        IrrigationSensorData irrigation = {};
+        irrigation.flow_valid = bounded_json_float(flow["flow_rate_lpm"], 0.0f, 1000.0f,
+                                                    irrigation.flow_rate_lpm);
+        irrigation.pressure_valid = bounded_json_float(flow["pressure_psi"], -5.0f, 300.0f,
+                                                        irrigation.pressure_psi);
+        irrigation.soil_valid = bounded_json_float(flow["soil_moisture_percent"], 0.0f, 100.0f,
+                                                    irrigation.soil_moisture_percent);
+        irrigation.rainfall_valid = bounded_json_float(flow["rainfall_mm"], 0.0f, 10000.0f,
+                                                        irrigation.rainfall_mm);
+        irrigation.rainfall_rate_valid = bounded_json_float(flow["rainfall_rate_mm_hr"],
+                                                             0.0f, 1000.0f,
+                                                             irrigation.rainfall_rate_mm_hr);
+        irrigation.valid = irrigation.flow_valid || irrigation.pressure_valid ||
+                           irrigation.soil_valid || irrigation.rainfall_valid ||
+                           irrigation.rainfall_rate_valid;
+        if (irrigation.valid) {
+            irrigation.updated_ms = millis();
+            g_state.irrigation = irrigation;
+            any_valid = true;
+        }
+    }
+    return any_valid;
+}
+
+static uint32_t action_mask(PendingType type) {
+    return type > PENDING_NONE && type < 32 ? (1UL << static_cast<unsigned>(type)) : 0;
+}
+
+static bool action_pending(PendingType type) {
+    return (g_pending_action_mask & action_mask(type)) != 0;
+}
+
+static void update_data_loading() {
+    g_state.data_loading = action_pending(PENDING_FETCH_SCHEDULE) ||
+                           action_pending(PENDING_FETCH_HISTORY);
+}
+
+static bool send_network_request(NetRequest &request, bool priority) {
+    if (!g_net_request_queue) return false;
+    const BaseType_t sent = priority
+        ? xQueueSendToFront(g_net_request_queue, &request, 0)
+        : xQueueSendToBack(g_net_request_queue, &request, 0);
+    return sent == pdTRUE;
+}
+
+static void finish_reported_action(PendingType type, bool report, bool success,
+                                   int code, const char *message) {
+    if (!report) return;
+    /* STOP may supersede an earlier queued action.  Do not let the older result
+     * erase the more safety-critical STOP status. */
+    if (g_state.action.busy && g_state.action.type != type) return;
+    finish_action(type, success, code, message);
+}
+
+static bool enqueue_live_action(const PendingAction &pending, bool report_action) {
+    if (!g_net_request_queue || !g_net_result_queue) {
+        finish_reported_action(pending.type, report_action, false, 0,
+                               "NETWORK WORKER UNAVAILABLE");
+        return false;
+    }
+    if (action_pending(pending.type)) {
+        if (report_action) ui_show_toast("REQUEST ALREADY IN PROGRESS", 2500);
+        return false;
+    }
+    if (report_action && g_state.action.busy && pending.type != PENDING_STOP_ALL) {
+        ui_show_toast("ANOTHER REQUEST IS IN PROGRESS", 2500);
+        return false;
+    }
+
+    NetRequest request = {};
+    request.action = pending.type;
+    request.report_action = report_action;
+    strlcpy(request.zone_name, pending.zone_name, sizeof(request.zone_name));
+    request.run_minutes = pending.run_minutes;
+
+    const char *progress = "WORKING";
+    bool priority = false;
+    switch (pending.type) {
+        case PENDING_RUN_ZONE:
+            if (!bearer_token_configured()) {
+                g_state.controls_authenticated = false;
+                finish_reported_action(pending.type, report_action, false, 0,
+                                       "CONTROL TOKEN NOT CONFIGURED");
+                return false;
             }
-        }
-    }
-    http.end();
-}
-
-static void execute_live_action() {
-    HTTPClient http;
-    http.setTimeout(6000);
-    String url;
-
-    switch (g_pending.type) {
-        case PENDING_RUN_ZONE: {
-            /* URL-encode zone name (e.g. "Hanging Pots" → "Hanging%20Pots") */
-            url = String(LAWNBOT_API_BASE) + "/zones/"
-                + zone_url_path(g_pending.zone_name) + "/run";
-            http.begin(url);
-            http.addHeader("Content-Type", "application/json");
-            char body[64];
-            snprintf(body, sizeof(body), "{\"duration_minutes\":%d}",
-                     g_pending.run_minutes > 0 ? g_pending.run_minutes : DEFAULT_RUN_MINUTES);
-            int code = http.POST(body);
-            Serial.printf("[HTTP] POST run %s (%d min) -> %d\n",
-                          g_pending.zone_name, g_pending.run_minutes, code);
+            if (!pending.zone_name[0]) {
+                finish_reported_action(pending.type, report_action, false, 0,
+                                       "ZONE NAME IS MISSING");
+                return false;
+            }
+            request.run_minutes = pending.run_minutes > 0
+                                ? pending.run_minutes : DEFAULT_RUN_MINUTES;
+            if (request.run_minutes < 1 || request.run_minutes > 180) {
+                finish_reported_action(pending.type, report_action, false, 0,
+                                       "RUN DURATION MUST BE 1-180 MIN");
+                return false;
+            }
+            request.op = NET_RUN_ZONE;
+            progress = "STARTING ZONE";
+            priority = true;
             break;
-        }
+
         case PENDING_STOP_ALL:
-            http.begin(String(LAWNBOT_API_BASE) + "/stop-all");
-            http.addHeader("Content-Type", "application/json");
-            Serial.printf("[HTTP] POST stop-all -> %d\n", http.POST(""));
+            if (!bearer_token_configured()) {
+                g_state.controls_authenticated = false;
+                finish_reported_action(pending.type, report_action, false, 0,
+                                       "CONTROL TOKEN NOT CONFIGURED");
+                return false;
+            }
+            request.op = NET_STOP_ALL;
+            progress = "STOPPING ALL ZONES";
+            priority = true;
             break;
 
         case PENDING_FETCH_SCHEDULE:
-            g_state.data_loading = true;
-            http.begin(String(LAWNBOT_API_BASE) + "/schedule");
-            if (http.GET() == 200) parse_schedule(http.getString().c_str());
-            else g_state.data_loading = false;
+            request.op = NET_GET_SCHEDULE;
+            progress = "LOADING SCHEDULE";
             break;
 
         case PENDING_FETCH_HISTORY:
-            g_state.data_loading = true;
-            http.begin(String(LAWNBOT_API_BASE) + "/history?limit=14");
-            if (http.GET() == 200) parse_history(http.getString().c_str());
-            else g_state.data_loading = false;
+            request.op = NET_GET_HISTORY;
+            progress = "LOADING HISTORY";
             break;
 
         case PENDING_SAVE_SCHEDULE: {
-            http.begin(String(LAWNBOT_API_BASE) + "/schedule");
-            http.addHeader("Content-Type", "application/json");
-            String body = build_schedule_put_body();
-            int code = http.PUT(body);
-            Serial.printf("[HTTP] PUT schedule -> %d\n", code);
-            if (code == 200) g_state.schedule.days_dirty = false;
+            if (!bearer_token_configured()) {
+                g_state.controls_authenticated = false;
+                finish_reported_action(pending.type, report_action, false, 0,
+                                       "CONTROL TOKEN NOT CONFIGURED");
+                return false;
+            }
+            char error[96] = {};
+            if (!build_schedule_put_body(g_pending_save_body, g_pending_save_source,
+                                         error, sizeof(error))) {
+                finish_reported_action(pending.type, report_action, false, 0, error);
+                return false;
+            }
+            request.op = NET_SAVE_PREFLIGHT;
+            progress = "CHECKING SCHEDULE";
             break;
         }
 
-        default: break;
+        default:
+            return false;
     }
 
-    http.end();
-    g_pending.type = PENDING_NONE;
+    if (!send_network_request(request, priority)) {
+        if (pending.type == PENDING_SAVE_SCHEDULE) {
+            g_pending_save_body = "";
+            g_pending_save_source = "";
+        }
+        finish_reported_action(pending.type, report_action, false, 0,
+                               "NETWORK QUEUE IS FULL");
+        return false;
+    }
+
+    if (pending.type == PENDING_STOP_ALL && action_pending(PENDING_RUN_ZONE))
+        g_cancelled_action_mask |= action_mask(PENDING_RUN_ZONE);
+    g_pending_action_mask |= action_mask(pending.type);
+    update_data_loading();
+    if (report_action) begin_action(pending.type, progress);
+    return true;
+}
+
+static bool enqueue_sensor_request() {
+    if (g_sensor_request_pending || !g_net_request_queue) return false;
+    NetRequest request = {};
+    request.op = NET_GET_SENSORS;
+    if (!send_network_request(request, false)) return false;
+    g_sensor_request_pending = true;
+    return true;
+}
+
+static int result_error_code(const NetResult &result) {
+    if (result.error == NET_RESULT_OK) return result.http_code;
+    return -1000 - static_cast<int>(result.error);
+}
+
+static const char *result_error_text(const NetResult &result) {
+    switch (result.error) {
+        case NET_RESULT_WIFI_DOWN:      return "WIFI DISCONNECTED";
+        case NET_RESULT_BODY_TOO_LARGE: return "RESPONSE TOO LARGE";
+        case NET_RESULT_OUT_OF_MEMORY:  return "NETWORK MEMORY EXHAUSTED";
+        case NET_RESULT_READ_FAILED:    return "RESPONSE READ FAILED";
+        case NET_RESULT_CANCELLED_BY_STOP: return "CANCELLED BY STOP";
+        default:                        return "REQUEST FAILED";
+    }
+}
+
+static void finish_network_failure(const NetResult &result, const char *operation) {
+    char message[96];
+    if (result.error != NET_RESULT_OK) {
+        snprintf(message, sizeof(message), "%s: %s", operation, result_error_text(result));
+    } else if (result.http_code < 0) {
+        snprintf(message, sizeof(message), "%s: %s", operation,
+                 HTTPClient::errorToString(result.http_code).c_str());
+    } else {
+        snprintf(message, sizeof(message), "%s: HTTP %d", operation, result.http_code);
+    }
+    finish_reported_action(result.action, result.report_action, false,
+                           result_error_code(result), message);
+}
+
+static bool network_result_succeeded(const NetResult &result) {
+    return result.error == NET_RESULT_OK && http_success(result.http_code);
+}
+
+static void handle_network_result(NetResult &result) {
+    bool final_result = true;
+
+    switch (result.op) {
+        case NET_GET_SENSORS:
+            g_sensor_request_pending = false;
+            if (network_result_succeeded(result))
+                parse_sensors(result.body, result.body_len);
+            break;
+
+        case NET_GET_SCHEDULE:
+            if (!network_result_succeeded(result))
+                finish_network_failure(result, "SCHEDULE LOAD FAILED");
+            else if (parse_schedule(result.body, result.body_len))
+                finish_reported_action(result.action, result.report_action, true,
+                                       result.http_code, "SCHEDULE LOADED");
+            else
+                finish_reported_action(result.action, result.report_action, false,
+                                       result.http_code, "INVALID SCHEDULE RESPONSE");
+            break;
+
+        case NET_GET_HISTORY:
+            if (!network_result_succeeded(result))
+                finish_network_failure(result, "HISTORY LOAD FAILED");
+            else if (parse_history(result.body, result.body_len))
+                finish_reported_action(result.action, result.report_action, true,
+                                       result.http_code, "HISTORY LOADED");
+            else
+                finish_reported_action(result.action, result.report_action, false,
+                                       result.http_code, "INVALID HISTORY RESPONSE");
+            break;
+
+        case NET_RUN_ZONE:
+        case NET_STOP_ALL: {
+            if (result.op == NET_RUN_ZONE &&
+                result.error == NET_RESULT_CANCELLED_BY_STOP) {
+                /* STOP intentionally superseded this queued start.  Its own
+                 * result remains the user-visible action status. */
+                break;
+            }
+            const bool ok = network_result_succeeded(result);
+            if (ok) g_state.controls_authenticated = true;
+            else if (result.http_code == 401 || result.http_code == 403 ||
+                     result.error == NET_RESULT_WIFI_DOWN)
+                g_state.controls_authenticated = false;
+            if (ok) {
+                finish_reported_action(result.action, result.report_action, true,
+                    result.http_code, result.op == NET_STOP_ALL ? "ALL ZONES STOPPED" : "ZONE STARTED");
+            } else {
+                finish_network_failure(result,
+                    result.op == NET_STOP_ALL ? "STOP FAILED" : "START FAILED");
+            }
+            break;
+        }
+
+        case NET_SAVE_PREFLIGHT: {
+            if (!network_result_succeeded(result)) {
+                finish_network_failure(result, "SCHEDULE CHECK FAILED");
+                g_pending_save_body = "";
+                g_pending_save_source = "";
+                break;
+            }
+            String current_source;
+            if (!canonical_schedule_source(result.body, result.body_len, current_source)) {
+                finish_reported_action(result.action, result.report_action, false,
+                                       result.http_code, "INVALID CURRENT SCHEDULE");
+                g_pending_save_body = "";
+                g_pending_save_source = "";
+                break;
+            }
+            if (current_source != g_schedule_source_json) {
+                g_state.schedule.save_supported = false;
+                finish_reported_action(result.action, result.report_action, false, 409,
+                                       "SCHEDULE CHANGED; REFRESH FIRST");
+                g_pending_save_body = "";
+                g_pending_save_source = "";
+                break;
+            }
+
+            NetRequest put = {};
+            put.op = NET_PUT_SCHEDULE;
+            put.action = result.action;
+            put.report_action = result.report_action;
+            put.payload_len = g_pending_save_body.length();
+            put.payload = static_cast<char *>(malloc(put.payload_len));
+            if (!put.payload) {
+                finish_reported_action(result.action, result.report_action, false, 0,
+                                       "NETWORK MEMORY EXHAUSTED");
+                g_pending_save_body = "";
+                g_pending_save_source = "";
+                break;
+            }
+            memcpy(put.payload, g_pending_save_body.c_str(), put.payload_len);
+            if (!send_network_request(put, false)) {
+                free(put.payload);
+                finish_reported_action(result.action, result.report_action, false, 0,
+                                       "NETWORK QUEUE IS FULL");
+                g_pending_save_body = "";
+                g_pending_save_source = "";
+                break;
+            }
+            final_result = false;
+            if (result.report_action) begin_action(result.action, "SAVING SCHEDULE");
+            break;
+        }
+
+        case NET_PUT_SCHEDULE:
+            if (network_result_succeeded(result)) {
+                g_state.controls_authenticated = true;
+                g_state.schedule.days_dirty = false;
+                if (g_state.schedule.num_slots > g_state.schedule.source_num_slots)
+                    g_state.schedule.source_num_slots = static_cast<uint8_t>(g_state.schedule.num_slots);
+                g_state.schedule.updated_ms = millis();
+                g_schedule_source_json = g_pending_save_source;
+                finish_reported_action(result.action, result.report_action, true,
+                                       result.http_code, "SCHEDULE SAVED");
+            } else {
+                if (result.http_code == 401 || result.http_code == 403 ||
+                    result.error == NET_RESULT_WIFI_DOWN)
+                    g_state.controls_authenticated = false;
+                finish_network_failure(result, "SCHEDULE SAVE FAILED");
+            }
+            g_pending_save_body = "";
+            g_pending_save_source = "";
+            break;
+    }
+
+    if (result.body) {
+        free(result.body);
+        result.body = nullptr;
+    }
+    if (final_result && result.action != PENDING_NONE) {
+        g_pending_action_mask &= ~action_mask(result.action);
+        g_cancelled_action_mask &= ~action_mask(result.action);
+        update_data_loading();
+    }
+}
+
+static void poll_network_results() {
+    if (!g_net_result_queue) return;
+    NetResult result = {};
+    while (xQueueReceive(g_net_result_queue, &result, 0) == pdTRUE)
+        handle_network_result(result);
 }
 
 static void ws_event(WStype_t type, uint8_t *payload, size_t length) {
     switch (type) {
-        case WStype_DISCONNECTED: g_state.ws_connected = false; break;
+        case WStype_DISCONNECTED:
+            g_state.ws_connected = false;
+            invalidate_live_status();
+            break;
         case WStype_CONNECTED:    g_state.ws_connected = true;  break;
         case WStype_TEXT:
-            parse_ws_status(reinterpret_cast<const char *>(payload), length);
+            if (!parse_ws_status(reinterpret_cast<const char *>(payload), length))
+                Serial.printf("[WS] Ignored invalid/oversized status (%u bytes)\n",
+                              static_cast<unsigned>(length));
             break;
         default: break;
     }
@@ -346,11 +1082,10 @@ static void connect_wifi() {
     WiFi.setHostname(OTA_HOSTNAME);
 #endif
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    /* 60-second association window — DHCP / 2.4 GHz contention can exceed
-     * 20 s on busy networks, and missing the OTA-init call here would brick
-     * the device until USB recovery. */
+    /* Nine-second initial window keeps boot responsive. The loop retries every
+     * 10 seconds and starts OTA/data services when WiFi eventually appears. */
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 120) {
+    while (WiFi.status() != WL_CONNECTED && attempts < 18) {
         delay(500); lv_timer_handler(); attempts++;
     }
     g_state.wifi_connected = (WiFi.status() == WL_CONNECTED);
@@ -365,10 +1100,10 @@ static void connect_wifi() {
 }
 
 static void sync_ntp() {
+    configTzTime(NTP_TZ_INFO, NTP_SERVER_1, NTP_SERVER_2);
     if (!g_state.wifi_connected) return;
-    configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER_1, NTP_SERVER_2);
     struct tm ti = {};
-    for (int i = 0; i < 20 && !getLocalTime(&ti, 0); i++) {
+    for (int i = 0; i < 8 && !getLocalTime(&ti, 0); i++) {
         delay(250); lv_timer_handler();
     }
 }
@@ -381,9 +1116,13 @@ static void update_live_clock() {
         strftime(g_state.time_str, sizeof(g_state.time_str), "%H:%M:%S", &ti);
         strftime(g_state.date_str, sizeof(g_state.date_str), "%A  %b %d", &ti);
 
-        /* Keep today_idx up-to-date */
+        /* Prefer the hub's authoritative index while its status is fresh.
+         * Local civil-date fallback is only for startup/offline display. */
         time_t now; time(&now);
-        g_state.schedule.today_idx = calc_today_sched_idx(now);
+        if (g_state.status_updated_ms == 0 ||
+            millis() - g_state.status_updated_ms > LAWNBOT_STATUS_STALE_MS) {
+            g_state.schedule.today_idx = calc_today_sched_idx(now);
+        }
     }
 }
 
@@ -426,6 +1165,10 @@ static void update_demo_weather(uint32_t ms) {
     uint32_t step = ms / 15000UL;
     float t = (float)step;
     g_state.weather.valid        = true;
+    g_state.weather.temp_valid   = true;
+    g_state.weather.humidity_valid = true;
+    g_state.weather.wind_speed_valid = true;
+    g_state.weather.wind_direction_valid = true;
     g_state.weather.temp_f       = 74.0f + sinf(t * 0.25f) * 5.0f;
     g_state.weather.humidity_pct = 52.0f + sinf(t * 0.19f + 0.8f) * 8.0f;
     g_state.weather.wind_mph     =  5.0f + sinf(t * 0.31f + 1.5f) * 2.5f;
@@ -462,6 +1205,7 @@ static void seed_demo_schedule() {
 static void seed_demo_history() {
     g_state.history.valid = true;
     g_state.history.count = 0;
+    g_state.history.updated_ms = millis();
 
     /* Generate 10 fake history entries going back in time */
     static const char *ZONES[3] = {"Hanging Pots", "Garden", "Misters"};
@@ -576,31 +1320,27 @@ void setup() {
     lcd.setup();
     ui_init();
     lv_timer_handler();
+#if ENABLE_SCREENSHOT_SD
+    if (screenshot_sd_init()) {
+        Serial.println("[SD] TF card ready");
+        Serial0.println("[SD] TF card ready");
+    } else {
+        Serial.println("[SD] TF card not ready");
+        Serial0.println("[SD] TF card not ready");
+    }
+#endif
 
 #if APP_MODE == APP_MODE_LIVE
     g_state.demo_mode = false;
+    g_state.controls_auth_configured = bearer_token_configured();
+    g_state.controls_authenticated = false;
     ui_set_splash_text("Connecting to LawnBot...");
     connect_wifi();
     lv_timer_handler();
     sync_ntp();
     lv_timer_handler();
-
-    /* Fetch initial schedule */
-    if (g_state.wifi_connected) {
-        ui_set_splash_text("Loading schedule...");
-        HTTPClient http;
-        http.setTimeout(5000);
-        http.begin(String(LAWNBOT_API_BASE) + "/schedule");
-        if (http.GET() == 200) parse_schedule(http.getString().c_str());
-        http.end();
-
-        /* Fetch initial history */
-        http.begin(String(LAWNBOT_API_BASE) + "/history?limit=14");
-        if (http.GET() == 200) parse_history(http.getString().c_str());
-        http.end();
-
-        poll_sensors();
-    }
+    if (!network_worker_init())
+        Serial.println("[HTTP] Failed to start network worker");
 
 #if ENABLE_OTA
     if (g_state.wifi_connected) ota_server_init();
@@ -623,6 +1363,13 @@ void setup() {
     ws.begin(LAWNBOT_HOST, LAWNBOT_PORT, LAWNBOT_WS_PATH);
     ws.onEvent(ws_event);
     ws.setReconnectInterval(5000);
+
+    /* Data arrives asynchronously after the dashboard is already responsive. */
+    PendingAction initial_schedule = {PENDING_FETCH_SCHEDULE, "", 0};
+    PendingAction initial_history = {PENDING_FETCH_HISTORY, "", 0};
+    enqueue_live_action(initial_schedule, false);
+    enqueue_live_action(initial_history, false);
+    enqueue_sensor_request();
 #else
     update_demo_state();
 #endif
@@ -645,12 +1392,31 @@ void loop() {
 #if APP_MODE == APP_MODE_LIVE
     ws.loop();
     update_live_clock();
+    poll_network_results();
 
     /* Periodic sensor poll every 15 s */
     uint32_t now = millis();
     if (now - g_last_sensor_ms > 15000UL) {
         g_last_sensor_ms = now;
-        poll_sensors();
+        enqueue_sensor_request();
+    }
+
+    if (g_state.status_updated_ms != 0 &&
+        now - g_state.status_updated_ms > LAWNBOT_STATUS_STALE_MS) {
+        Serial.println("[WS] Status expired; invalidating actuator state");
+        invalidate_live_status();
+    }
+    if (g_state.weather_updated_ms != 0 &&
+        now - g_state.weather_updated_ms > LAWNBOT_WEATHER_STALE_MS) {
+        g_state.weather.valid = false;
+        g_state.weather.temp_valid = false;
+        g_state.weather.humidity_valid = false;
+        g_state.weather.wind_speed_valid = false;
+        g_state.weather.wind_direction_valid = false;
+    }
+    if (g_state.irrigation.updated_ms != 0 &&
+        now - g_state.irrigation.updated_ms > LAWNBOT_WEATHER_STALE_MS) {
+        g_state.irrigation.valid = false;
     }
 
     /* WiFi reconnect check */
@@ -658,9 +1424,32 @@ void loop() {
     if (now - last_wifi_ms > 10000UL) {
         last_wifi_ms = now;
         bool ok = (WiFi.status() == WL_CONNECTED);
+        const bool was_connected = g_state.wifi_connected;
         if (ok != g_state.wifi_connected) {
             g_state.wifi_connected = ok;
-            if (!ok) WiFi.reconnect();
+            if (!ok) {
+                g_state.ws_connected = false;
+                g_state.controls_authenticated = false;
+                g_state.weather.valid = false;
+                g_state.weather.temp_valid = false;
+                g_state.weather.humidity_valid = false;
+                g_state.weather.wind_speed_valid = false;
+                g_state.weather.wind_direction_valid = false;
+                g_state.irrigation.valid = false;
+                invalidate_live_status();
+            }
+        }
+        if (!ok) WiFi.reconnect();
+        else if (!was_connected) {
+            if (!g_state.schedule.valid) {
+                PendingAction request = {PENDING_FETCH_SCHEDULE, "", 0};
+                enqueue_live_action(request, false);
+            }
+            if (!g_state.history.valid) {
+                PendingAction request = {PENDING_FETCH_HISTORY, "", 0};
+                enqueue_live_action(request, false);
+            }
+            enqueue_sensor_request();
         }
 #if ENABLE_OTA
         /* If WiFi came up after the boot-time init missed the window,
@@ -672,19 +1461,33 @@ void loop() {
     update_demo_state();
 #endif
 
-#if UI_CONTROLS_ONLY_DEBUG
-    g_state.controls_visible = true;
-#else
     g_state.controls_visible = (millis() - g_last_touch_ms) < CTRL_WAKE_MS;
-#endif
     lv_timer_handler();
+#if ENABLE_SCREENSHOT_SD
+    poll_screenshot_sd_result();
+#endif
 
     if (g_pending.type != PENDING_NONE) {
-#if APP_MODE == APP_MODE_LIVE
-        execute_live_action();
+        if (g_pending.type == PENDING_SAVE_SCREENSHOT_SD) {
+#if ENABLE_SCREENSHOT_SD
+            start_screenshot_sd_request();
 #else
-        execute_demo_action();
+            g_pending.type = PENDING_NONE;
+            ui_set_snap_busy(false);
+            ui_show_toast("SD SCREENSHOT DISABLED", 2500);
 #endif
+        } else {
+#if APP_MODE == APP_MODE_LIVE
+            PendingAction request = {};
+            request.type = g_pending.type;
+            strlcpy(request.zone_name, g_pending.zone_name, sizeof(request.zone_name));
+            request.run_minutes = g_pending.run_minutes;
+            g_pending.type = PENDING_NONE;
+            enqueue_live_action(request, true);
+#else
+            execute_demo_action();
+#endif
+        }
     }
 
 #if ENABLE_SCREENSHOT_HTTP

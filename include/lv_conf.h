@@ -66,16 +66,16 @@
    FONTS
    Only Montserrat sizes we actually use are enabled to save flash.
 ====================*/
-#define LV_FONT_MONTSERRAT_12   1
-#define LV_FONT_MONTSERRAT_14   1
+#define LV_FONT_MONTSERRAT_12   0
+#define LV_FONT_MONTSERRAT_14   0
 #define LV_FONT_MONTSERRAT_16   1
 #define LV_FONT_MONTSERRAT_18   1
 #define LV_FONT_MONTSERRAT_20   1
 #define LV_FONT_MONTSERRAT_24   1
 #define LV_FONT_MONTSERRAT_28   1
 #define LV_FONT_MONTSERRAT_32   1
-#define LV_FONT_MONTSERRAT_36   1
-#define LV_FONT_MONTSERRAT_48   1
+#define LV_FONT_MONTSERRAT_36   0
+#define LV_FONT_MONTSERRAT_48   0
 
 #define LV_FONT_DEFAULT  &lv_font_montserrat_20
 
@@ -84,13 +84,13 @@
    All standard widgets are ON by default in LVGL v8.
    Extra widgets that depend on disabled base widgets must be explicitly disabled.
 ====================*/
-#define LV_USE_ARC          1
+#define LV_USE_ARC          0
 #define LV_USE_BTN          1
 #define LV_USE_LABEL        1
 #define LV_USE_LINE         1
-/* IMG and TEXTAREA must stay ON — extra widgets (animimg, spinbox) depend on them */
+/* IMG is used by the dashboard. TEXTAREA and its dependent extras are disabled. */
 #define LV_USE_IMG          1
-#define LV_USE_TEXTAREA     1
+#define LV_USE_TEXTAREA     0
 /* Extra widgets we don't use — disable ALL unused extras to avoid dep chains */
 #define LV_USE_ANIMIMG      0
 #define LV_USE_CALENDAR     0
@@ -116,8 +116,8 @@
 #define LV_USE_TABVIEW      0
 #define LV_USE_TILEVIEW     0
 #define LV_USE_WIN          0
-/* Keep these — used by the dashboard */
-#define LV_USE_MSGBOX       1
+/* No message-box widget is used by the dashboard. */
+#define LV_USE_MSGBOX       0
 
 /*====================
    THEME
@@ -131,8 +131,8 @@
 #define LV_USE_PERF_MONITOR     0
 #define LV_USE_MEM_MONITOR      0
 
-/* Snapshot — used by HTTP /capture.bmp for remote screen grab */
-#define LV_USE_SNAPSHOT         1
+/* Remote capture reads the RGB framebuffer directly; LVGL snapshot is unused. */
+#define LV_USE_SNAPSHOT         0
 
 #endif /* LV_CONF_H */
 #endif /* #if 1 guard */

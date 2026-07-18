@@ -39,3 +39,7 @@ public:
 };
 
 extern LGFX lcd;
+
+/* Coordinate direct framebuffer readers (screen capture) with LVGL flushes. */
+bool framebuffer_lock(uint32_t timeout_ms);
+void framebuffer_unlock();

@@ -24,6 +24,15 @@
 extern void ui_show_toast(const char *text, uint32_t ms);
 
 static WebServer g_ota_http(OTA_HTTP_PORT);
+static bool g_ota_started = false;
+
+static bool ota_password_configured() {
+    String password = OTA_PASSWORD;
+    password.trim();
+    password.toLowerCase();
+    return !password.isEmpty() && password != "change-me" && password != "placeholder" &&
+           password.indexOf("placeholder") < 0 && password.indexOf("replace-with") < 0;
+}
 
 /* ── Public API ──────────────────────────────────────────────────────── */
 
@@ -32,9 +41,16 @@ void ota_server_init() {
      * re-running ArduinoOTA.begin() / ElegantOTA.begin() / g_ota_http.begin()
      * can leak handlers or assert on some Arduino-ESP32 versions.
      * (Originally added in ffd422e, restored after ElegantOTA migration.) */
-    static bool s_initialized = false;
-    if (s_initialized) return;
-    s_initialized = true;
+    static bool s_init_attempted = false;
+    if (s_init_attempted) return;
+    s_init_attempted = true;
+
+    /* Reject committed defaults and documentation sentinels before either
+     * ArduinoOTA or the HTTP upload server is configured or started. */
+    if (!ota_password_configured()) {
+        Serial.println("[OTA] Disabled: configure a private OTA password");
+        return;
+    }
 
     /* ArduinoOTA — used by PlatformIO espota upload */
     ArduinoOTA.setHostname(OTA_HOSTNAME);
@@ -58,14 +74,13 @@ void ota_server_init() {
     });
     ArduinoOTA.begin();
 
-    /* ElegantOTA 2.2.9 browser upload at /update.
-     * Note: 2.x exposes only begin() — the onStart/onEnd/loop callbacks
-     * appeared in ElegantOTA 3.x, which is currently a paid Pro library
-     * with telemetry. We deliberately stay on 2.2.9 (free, no telemetry)
-     * and accept losing the on-end toast; the device reboot itself is
-     * the visible signal that the OTA finished. */
+    /* ElegantOTA 2.x browser upload at /update. Version 3 is substantially
+       smaller but changes APIs and uses AGPL-3.0 for the open-source edition;
+       keep that migration isolated until compatibility and licensing have
+       been reviewed. */
     ElegantOTA.begin(&g_ota_http, OTA_USERNAME, OTA_PASSWORD);
     g_ota_http.begin();
+    g_ota_started = true;
 
     Serial.printf("[OTA] ArduinoOTA  — %s.local  (port 3232)\n", OTA_HOSTNAME);
     Serial.printf("[OTA] Browser OTA — http://%s/update\n",
@@ -73,6 +88,7 @@ void ota_server_init() {
 }
 
 void ota_server_loop() {
+    if (!g_ota_started) return;
     ArduinoOTA.handle();
     g_ota_http.handleClient();
     /* ElegantOTA.loop() does not exist in 2.2.9 — the WebServer poll above

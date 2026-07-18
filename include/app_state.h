@@ -2,8 +2,9 @@
 #include <Arduino.h>
 
 /**
- * Shared application state — written by WiFi/WebSocket/HTTP tasks,
- * read by the LVGL UI update timer.
+ * Shared application state — mutated only by the main/LVGL task. Network
+ * workers return owned, bounded result buffers through a queue; the main task
+ * validates and applies them before the LVGL update timer reads this state.
  */
 
 /* ── Zone relay state ────────────────────────────────────── */
@@ -33,10 +34,31 @@ struct NextRun {
 /* ── Weather / sensor data ────────────────────────────────── */
 struct WeatherData {
     bool  valid;
+    bool  temp_valid;
+    bool  humidity_valid;
+    bool  wind_speed_valid;
+    bool  wind_direction_valid;
     float temp_f;
     float humidity_pct;
     float wind_mph;
     char  wind_dir[4];
+};
+
+/* Measured irrigation telemetry.  Per-field validity avoids presenting a
+ * missing sensor as a very convincing zero. */
+struct IrrigationSensorData {
+    bool valid;
+    bool flow_valid;
+    bool pressure_valid;
+    bool soil_valid;
+    bool rainfall_valid;
+    bool rainfall_rate_valid;
+    float flow_rate_lpm;
+    float pressure_psi;
+    float soil_moisture_percent;
+    float rainfall_mm;
+    float rainfall_rate_mm_hr;
+    uint32_t updated_ms;
 };
 
 /* ── Schedule data ─────────────────────────────────────────── */
@@ -60,6 +82,10 @@ struct ScheduleData {
     bool      valid;
     bool      days[SCHED_DAYS];    /* which of the 14 rotating days run */
     bool      days_dirty;          /* modified locally, not yet saved */
+    bool      truncated;           /* UI omits server slots/sets beyond local display limits */
+    bool      save_supported;      /* a lossless source document is available for PUT */
+    uint8_t   source_num_slots;    /* total slots in the source document, including hidden ones */
+    uint32_t  updated_ms;          /* millis() when the last valid schedule arrived */
     SchedSlot slots[SCHED_MAX_SLOTS];
     int       num_slots;
     int       today_idx;           /* (today - 2024-01-01).days % 14 */
@@ -80,6 +106,7 @@ struct HistData {
     bool     valid;
     HistEntry entries[HIST_MAX];
     int      count;
+    uint32_t updated_ms;
 };
 
 /* ── Pending HTTP action (set by UI callbacks, consumed in loop) ── */
@@ -89,13 +116,24 @@ enum PendingType {
     PENDING_STOP_ALL,
     PENDING_FETCH_SCHEDULE,
     PENDING_FETCH_HISTORY,
-    PENDING_SAVE_SCHEDULE
+    PENDING_SAVE_SCHEDULE,
+    PENDING_SAVE_SCREENSHOT_SD
 };
 
 struct PendingAction {
     volatile PendingType type;
     char zone_name[32];     /* API name for PENDING_RUN_ZONE */
     int  run_minutes;       /* duration for PENDING_RUN_ZONE */
+};
+
+/* Last HTTP/action result.  The UI can render this without parsing Serial logs. */
+struct ActionStatus {
+    bool        busy;
+    bool        success;
+    PendingType type;
+    int         http_code;          /* HTTP status, or a negative HTTPClient error */
+    uint32_t    completed_ms;
+    char        message[96];
 };
 
 /* ── Full application state ──────────────────────────────── */
@@ -109,6 +147,10 @@ struct AppState {
     /* Connectivity */
     bool wifi_connected;
     bool ws_connected;
+    bool controls_auth_configured; /* a bearer token is present in this build */
+    bool controls_authenticated;   /* most recent authenticated control request succeeded */
+    uint32_t status_updated_ms;    /* last valid WebSocket status message */
+    uint32_t weather_updated_ms;   /* last valid sensor/weather response */
 
     /* Zone relay states (from WebSocket) */
     ZoneRelays relays;
@@ -119,6 +161,7 @@ struct AppState {
 
     /* Sensor / weather */
     WeatherData weather;
+    IrrigationSensorData irrigation;
 
     /* Local clock (updated every 200ms from NTP-synced RTC) */
     char time_str[10];     /* "HH:MM:SS" */
@@ -128,6 +171,7 @@ struct AppState {
     ScheduleData schedule;
     HistData     history;
     bool         data_loading;  /* true while HTTP fetch in progress */
+    ActionStatus action;
 
     /* UI navigation: 0=dash, 1=schedule, 2=history */
     int  active_screen;
