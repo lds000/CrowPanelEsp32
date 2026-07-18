@@ -1,5 +1,19 @@
 # Hub Side Checklist
 
+> **Contract warning (2026-07-17):** the live hub exposes more zones and
+> schedule fields than the panel's legacy three-zone editor can represent.
+> The firmware preserves unmodeled sets in its bounded source document and edits
+> only modeled fields, warning when additional hub-managed data is present. Keep
+> the overflow/failure gate and add a narrow PATCH/versioned API or a full dynamic
+> editor before expanding edit scope. The live OpenAPI contract also requires
+> bearer authentication for run, stop, and schedule mutations.
+>
+> **Residual race:** the panel's preflight GET followed by PUT detects many
+> intervening edits but is not atomic. Two clients can still update between the
+> preflight and write. The hub should return a schedule revision/ETag and require
+> `If-Match` on PUT, or expose narrow PATCH operations. Do not describe the
+> current client-side check as complete concurrency control.
+
 ## Current Status
 - The CrowPanel is already in live mode and talking to the hub at `192.168.68.88`.
 - The display is successfully connecting to the hub websocket and reading at least some live state.
@@ -25,12 +39,17 @@
 - `POST /api/stop-all`
 - `PUT /api/schedule`
 
-## Zone Names
+All control endpoints require `Authorization: Bearer <device credential>`.
+The credential belongs in `config_private.h`, never in this checklist.
+
+## Legacy panel zone names
 - `Hanging Pots`
 - `Garden`
 - `Misters`
 
-These names must stay consistent between the hub API and the CrowPanel.
+These are the three names the current presentation can display. The hub may
+publish additional zones; identity should migrate to stable IDs rather than
+making user-facing names an API key wearing a fake moustache.
 
 ## Request Contract Expected By The Display
 
@@ -135,9 +154,8 @@ Example expected shape:
 }
 ```
 
-Note:
-- The live hub currently appears to return sensor data nested under `environment.data` with names like `temperature` and `wind_speed`.
-- If weather is missing or wrong on the CrowPanel, this endpoint is the first thing to fix.
+The live hub currently returns these fields under root `environment`. Treat the
+OpenAPI document and contract tests as authoritative if this shape changes.
 
 ### Websocket Status Message
 The display listens for websocket messages shaped like:
@@ -195,4 +213,4 @@ The display also tolerates these aliases:
 ## If You Want To Clean Up The Hub
 - Disable `wlan0` on the hub if you do not need Wi-Fi fallback.
 - Keep Tailscale only for remote maintenance.
-- Add a simple `/api/health` endpoint that returns version, uptime, and node identity.
+- Keep the existing `/api/health` endpoint returning version, uptime, and node identity.

@@ -1,48 +1,76 @@
 #!/usr/bin/env python3
-"""
-CrowPanel screenshot relay — hub Pi side.
+"""Authenticated, bounded screenshot cache for the CrowPanel.
 
-Runs on the LawnBot hub Pi (192.168.68.88, Tailscale 100.116.147.6)
-and serves a *cached* snapshot of the CrowPanel's on-device
-screenshot endpoint (192.168.68.107:8080/capture.bmp).
-
-Why cached: the panel's WiFi throughput for large payloads is ~3-7
-KB/s, so a single 1.1 MB BMP takes minutes to download end-to-end.
-Instead of making every client wait for that, a background worker on
-the Pi keeps one warm copy refreshed on an interval (and on demand)
-and serves it to clients in under a second.
-
-Endpoints:
-  GET /                        — HTML preview with auto-refresh
-  GET /capture.bmp             — cached BMP passthrough
-  GET /capture.png             — cached PNG (converted via Pillow)
-  GET /controls.bmp            — wake controls, fetch fresh BMP, return it
-  GET /controls.png            — wake controls, fetch fresh PNG, return it
-  GET /wake-controls           — ask the panel to show its controls bar
-  GET /refresh                 — trigger a background refresh (non-blocking)
-  GET /refresh?wait=1          — trigger refresh and wait for it to finish
-  GET /health                  — JSON status (age of cache, last fetch stats)
+The panel is deliberately fetched by one worker at a time. Concurrent callers
+join that fetch and receive its real result rather than starting a stampede.
+Mutating operations are POST-only unless explicitly enabled for migration.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import http.server
 import io
 import json
 import os
 import socketserver
+import struct
 import sys
 import threading
 import time
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-PANEL_HOST: str = os.environ.get("PANEL_HOST", "192.168.68.107")
-PANEL_PORT: int = int(os.environ.get("PANEL_PORT", "8080"))
-BIND_HOST: str = os.environ.get("BIND_HOST", "0.0.0.0")
-BIND_PORT: int = int(os.environ.get("BIND_PORT", "9108"))
-FETCH_TIMEOUT: float = float(os.environ.get("FETCH_TIMEOUT", "420"))   # 7 min — slow WiFi
-AUTO_REFRESH_SEC: float = float(os.environ.get("AUTO_REFRESH_SEC", "120"))  # background cadence
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise SystemExit(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be a number") from exc
+    if not minimum <= value <= maximum:
+        raise SystemExit(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+PANEL_HOST = os.environ.get("PANEL_HOST", "192.168.68.107")
+PANEL_PORT = _env_int("PANEL_PORT", 8080, 1, 65535)
+PANEL_AUTH_USER = os.environ.get("PANEL_AUTH_USER", "crowpanel")
+PANEL_AUTH_TOKEN = os.environ.get("PANEL_AUTH_TOKEN", "")
+
+# Safe by default. Non-loopback binds require a token or an explicit opt-out.
+BIND_HOST = os.environ.get("BIND_HOST", "127.0.0.1")
+BIND_PORT = _env_int("BIND_PORT", 9108, 1, 65535)
+RELAY_TOKEN = os.environ.get("RELAY_TOKEN", "")
+ALLOW_UNAUTHENTICATED = _env_bool("ALLOW_UNAUTHENTICATED")
+ALLOW_LEGACY_GET_ACTIONS = _env_bool("ALLOW_LEGACY_GET_ACTIONS")
+CORS_ALLOW_ORIGIN = os.environ.get("CORS_ALLOW_ORIGIN", "").strip()
+
+FETCH_TIMEOUT = _env_float("FETCH_TIMEOUT", 420.0, 1.0, 900.0)
+AUTO_REFRESH_SEC = _env_float("AUTO_REFRESH_SEC", 120.0, 10.0, 86400.0)
+ACTION_MIN_INTERVAL_SEC = _env_float("ACTION_MIN_INTERVAL_SEC", 2.0, 0.0, 3600.0)
+MAX_CAPTURE_BYTES = _env_int("MAX_CAPTURE_BYTES", 2_000_000, 1024, 20_000_000)
+MAX_SERVER_THREADS = _env_int("MAX_SERVER_THREADS", 8, 1, 64)
+MAX_ACTION_BODY_BYTES = _env_int("MAX_ACTION_BODY_BYTES", 1024, 0, 65536)
+REQUEST_TIMEOUT_SEC = _env_float("REQUEST_TIMEOUT_SEC", 15.0, 1.0, 300.0)
+EXPECTED_WIDTH = _env_int("EXPECTED_WIDTH", 800, 1, 8192)
+EXPECTED_HEIGHT = _env_int("EXPECTED_HEIGHT", 480, 1, 8192)
 
 try:
     from PIL import Image  # type: ignore
@@ -51,261 +79,336 @@ except Exception:
     _HAVE_PIL = False
 
 
-# ─── Cache state (protected by _lock) ────────────────────────────────
 _lock = threading.Lock()
-_cache_bmp: bytes = b""
-_cache_png: bytes = b""
-_cache_fetched_at: float = 0.0         # epoch seconds of last SUCCESSFUL fetch
-_last_attempt_at: float = 0.0
-_last_attempt_ok: bool = False
-_last_attempt_bytes: int = 0
-_last_attempt_duration: float = 0.0
-_last_attempt_error: str = ""
+_cache_bmp = b""
+_cache_png = b""
+_cache_fetched_at = 0.0
+_last_attempt_at = 0.0
+_last_attempt_ok = False
+_last_attempt_bytes = 0
+_last_attempt_duration = 0.0
+_last_attempt_error = ""
 
-# A single worker does all panel fetches to avoid stampeding the panel.
-_fetch_lock = threading.Lock()
-_fetch_in_progress = threading.Event()
+# A condition carries both completion and the exact result for joined callers.
+_fetch_condition = threading.Condition()
+_fetch_active = False
+_fetch_generation = 0
+_fetch_result: tuple[bool, str] = (False, "no fetch attempted")
+
+_action_lock = threading.Lock()
+_last_action_by_client: dict[tuple[str, str], float] = {}
+_ACTION_PATHS = {"/refresh", "/wake-controls", "/controls.bmp", "/controls.png"}
 
 
-def _fetch_from_panel() -> tuple[bool, str]:
-    """Fetch /capture.bmp from the panel and update the cache.
+def _panel_request(path: str, timeout: float) -> urllib.request.Request:
+    headers = {"User-Agent": "crowpanel-relay/2.0"}
+    if PANEL_AUTH_TOKEN:
+        raw = f"{PANEL_AUTH_USER}:{PANEL_AUTH_TOKEN}".encode("utf-8")
+        headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
+    if path != "/capture.bmp":
+        headers["X-CrowPanel-Action"] = "1"
+    return urllib.request.Request(
+        f"http://{PANEL_HOST}:{PANEL_PORT}{path}",
+        headers=headers,
+        method="GET" if path == "/capture.bmp" else "POST",
+    )
 
-    Only one fetch runs at a time (enforced by _fetch_lock). Returns
-    (success, message). Safe to call from the HTTP thread or the
-    background refresher.
-    """
+
+def _validate_bmp(body: bytes) -> tuple[int, int]:
+    """Validate the fixed-format capture before publishing it to clients."""
+    if len(body) < 54 or len(body) > MAX_CAPTURE_BYTES:
+        raise ValueError(f"BMP size {len(body)} is outside allowed range")
+    if body[:2] != b"BM":
+        raise ValueError("capture is not a BMP")
+    declared_size = struct.unpack_from("<I", body, 2)[0]
+    pixel_offset = struct.unpack_from("<I", body, 10)[0]
+    dib_size = struct.unpack_from("<I", body, 14)[0]
+    width, height = struct.unpack_from("<ii", body, 18)
+    planes, bpp = struct.unpack_from("<HH", body, 26)
+    compression = struct.unpack_from("<I", body, 30)[0]
+    abs_height = abs(height)
+    if declared_size != len(body) or dib_size < 40 or pixel_offset < 54:
+        raise ValueError("BMP header size fields are inconsistent")
+    if width != EXPECTED_WIDTH or abs_height != EXPECTED_HEIGHT:
+        raise ValueError(f"unexpected BMP dimensions {width}x{abs_height}")
+    if planes != 1 or bpp != 24 or compression != 0:
+        raise ValueError("expected an uncompressed 24-bit BMP")
+    row_size = (width * 3 + 3) & ~3
+    if pixel_offset + row_size * abs_height != len(body):
+        raise ValueError("BMP pixel data length is inconsistent")
+    return width, abs_height
+
+
+def _read_bounded_response(resp) -> bytes:
+    length = resp.headers.get("Content-Length")
+    if length:
+        try:
+            if int(length) > MAX_CAPTURE_BYTES:
+                raise ValueError("panel capture exceeds MAX_CAPTURE_BYTES")
+        except ValueError as exc:
+            raise ValueError("invalid or excessive Content-Length") from exc
+    body = resp.read(MAX_CAPTURE_BYTES + 1)
+    if len(body) > MAX_CAPTURE_BYTES:
+        raise ValueError("panel capture exceeds MAX_CAPTURE_BYTES")
+    return body
+
+
+def _perform_fetch() -> tuple[bool, str]:
     global _cache_bmp, _cache_png, _cache_fetched_at
     global _last_attempt_at, _last_attempt_ok, _last_attempt_bytes
     global _last_attempt_duration, _last_attempt_error
 
-    acquired = _fetch_lock.acquire(blocking=False)
-    if not acquired:
-        # Another fetch is already running; just wait for it to finish
-        # and then return the current cache state.
-        _fetch_in_progress.wait(timeout=FETCH_TIMEOUT + 5)
-        return (True, "coalesced with in-flight fetch")
-
-    _fetch_in_progress.set()
     started = time.time()
-    url = f"http://{PANEL_HOST}:{PANEL_PORT}/capture.bmp"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "crowpanel-relay/1.1"})
+        req = _panel_request("/capture.bmp", FETCH_TIMEOUT)
         with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"panel returned HTTP {resp.status}")
-            body = resp.read()
+            body = _read_bounded_response(resp)
+        width, height = _validate_bmp(body)
 
         png_bytes = b""
         if _HAVE_PIL:
             try:
-                img = Image.open(io.BytesIO(body))
-                buf = io.BytesIO()
-                img.save(buf, format="PNG", optimize=True)
-                png_bytes = buf.getvalue()
-            except Exception as e:
-                sys.stderr.write(f"[fetch] BMP->PNG failed: {e}\n")
+                with Image.open(io.BytesIO(body)) as img:
+                    if img.size != (width, height):
+                        raise ValueError("decoder dimensions differ from BMP header")
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG", optimize=True)
+                    png_bytes = buf.getvalue()
+            except Exception as exc:
+                sys.stderr.write(f"[fetch] BMP-to-PNG failed: {exc}\n")
 
+        finished = time.time()
         with _lock:
             _cache_bmp = body
             _cache_png = png_bytes
-            _cache_fetched_at = time.time()
-            _last_attempt_at = _cache_fetched_at
+            _cache_fetched_at = finished
+            _last_attempt_at = finished
             _last_attempt_ok = True
             _last_attempt_bytes = len(body)
-            _last_attempt_duration = _cache_fetched_at - started
+            _last_attempt_duration = finished - started
             _last_attempt_error = ""
-        msg = f"ok: BMP {len(body)}B PNG {len(png_bytes)}B in {_last_attempt_duration:.1f}s"
+        msg = f"ok: BMP {len(body)}B PNG {len(png_bytes)}B in {finished - started:.1f}s"
         sys.stderr.write(f"[fetch] {msg}\n")
-        return (True, msg)
-    except Exception as e:
-        dur = time.time() - started
+        return True, msg
+    except Exception as exc:
+        duration = time.time() - started
         with _lock:
             _last_attempt_at = time.time()
             _last_attempt_ok = False
             _last_attempt_bytes = 0
-            _last_attempt_duration = dur
-            _last_attempt_error = str(e)
-        msg = f"failed after {dur:.1f}s: {e}"
+            _last_attempt_duration = duration
+            _last_attempt_error = str(exc)
+        msg = f"failed after {duration:.1f}s: {exc}"
         sys.stderr.write(f"[fetch] {msg}\n")
-        return (False, msg)
-    finally:
-        _fetch_in_progress.clear()
-        _fetch_lock.release()
+        return False, msg
+
+
+def _fetch_from_panel() -> tuple[bool, str]:
+    """Run one fetch, or join an in-flight fetch and return its real result."""
+    global _fetch_active, _fetch_generation, _fetch_result
+
+    with _fetch_condition:
+        if _fetch_active:
+            generation = _fetch_generation
+            completed = _fetch_condition.wait_for(
+                lambda: _fetch_generation != generation,
+                timeout=FETCH_TIMEOUT + 5,
+            )
+            if not completed:
+                return False, "timed out waiting for in-flight fetch"
+            return _fetch_result
+        _fetch_active = True
+
+    result = _perform_fetch()
+    with _fetch_condition:
+        _fetch_result = result
+        _fetch_generation += 1
+        _fetch_active = False
+        _fetch_condition.notify_all()
+    return result
+
+
+def _fetch_is_active() -> bool:
+    with _fetch_condition:
+        return _fetch_active
 
 
 def _wake_panel_controls() -> tuple[bool, str]:
-    """Ask the panel to show the transient controls bar."""
-    url = f"http://{PANEL_HOST}:{PANEL_PORT}/wake-controls"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "crowpanel-relay/1.1"})
+        req = _panel_request("/wake-controls", 10.0)
         with urllib.request.urlopen(req, timeout=10) as resp:
-            body = resp.read(200).decode("utf-8", errors="replace").strip()
+            body = resp.read(201).decode("utf-8", errors="replace").strip()
+            if len(body) > 200:
+                raise RuntimeError("panel response was too large")
             if resp.status != 200:
                 raise RuntimeError(f"panel returned HTTP {resp.status}: {body}")
-        return (True, body or "controls awake")
-    except Exception as e:
-        return (False, str(e))
+        return True, body or "controls awake"
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _background_refresher() -> None:
-    """Periodically refresh the cache in the background. Silent warm-up."""
     time.sleep(2.0)
     while True:
-        try:
-            _fetch_from_panel()
-        except Exception as e:
-            sys.stderr.write(f"[bg] unexpected: {e}\n")
+        _fetch_from_panel()
         time.sleep(AUTO_REFRESH_SEC)
 
 
-# ─── HTTP server ─────────────────────────────────────────────────────
-
-_INDEX_HTML = """<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8">
-<title>CrowPanel Screenshot Relay</title>
-<style>
-  body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; padding:24px }
-  h1 { color:#38bdf8; margin:0 0 4px }
-  .sub { color:#64748b; margin-bottom:20px }
-  .card { background:#1e293b; border:1px solid #334155; border-radius:8px; padding:16px; margin-bottom:16px; max-width:900px }
-  a { color:#38bdf8 }
-  img { max-width:100%; border:1px solid #334155; border-radius:4px; display:block; background:#000 }
-  .row { display:flex; gap:12px; flex-wrap:wrap; margin-top:8px; align-items:center }
-  button { background:#38bdf8; color:#0f172a; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:600 }
-  button:hover { background:#0ea5e9 }
-  button:disabled { background:#475569; cursor:not-allowed }
-  code { background:#0f172a; padding:2px 6px; border-radius:3px; color:#94a3b8 }
-  #status { font-family:ui-monospace,monospace; font-size:12px; color:#94a3b8 }
-</style>
-</head><body>
-<h1>CrowPanel Screenshot Relay</h1>
-<div class="sub">Cached relay — panel WiFi is slow (~5 min/BMP), so we keep a warm copy and refresh in the background.</div>
-
-<div class="card">
-  <strong>Controls</strong>
-  <div class="row">
-    <button onclick="refreshImage()">Reload cached image</button>
-    <button id="pullBtn" onclick="pullFresh()">Pull fresh from panel (blocks until done)</button>
-    <button id="controlsBtn" onclick="pullControls()">Show controls + capture</button>
-  </div>
-  <p id="status">loading...</p>
-  <p><img id="shot" src="/capture.png" alt="screenshot"></p>
-</div>
-
-<div class="card">
-  <strong>CLI</strong>
-  <p><code>curl -o capture.png http://&lt;pi-ip&gt;:9108/capture.png</code></p>
-  <p>Force a fresh pull and wait for it to finish (can take several minutes):<br>
-     <code>curl -m 600 http://&lt;pi-ip&gt;:9108/refresh?wait=1</code></p>
-</div>
-
+_INDEX_HTML = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CrowPanel Screenshot Relay</title><style>
+body{background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;margin:0;padding:24px}
+h1{color:#38bdf8}.card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:16px;max-width:900px}
+img{max-width:100%;border:1px solid #334155;background:#000}button{margin:4px;padding:8px 14px}code{color:#94a3b8}
+</style></head><body><h1>CrowPanel Screenshot Relay</h1><div class="card">
+<p>The panel is slow, so this page serves a validated cache instead of organizing a tiny denial-of-service festival.</p>
+<button onclick="reloadCached()">Reload cache</button>
+<button id="fresh" onclick="action('/refresh?wait=1')">Pull fresh</button>
+<button id="controls" onclick="controls()">Show controls + capture</button>
+<p id="status">Loading...</p><img id="shot" src="/capture.png" alt="CrowPanel screenshot"></div>
 <script>
-async function updateStatus() {
-  try {
-    const r = await fetch("/health", { cache: "no-store" });
-    const j = await r.json();
-    const age = j.cache_age_sec;
-    const ageStr = age === null ? "no cache yet" : age.toFixed(0) + "s ago";
-    const last = j.last_attempt_ok ? ("ok " + j.last_attempt_bytes + "B in " + j.last_attempt_duration_sec.toFixed(1) + "s") : ("FAIL: " + (j.last_attempt_error || ""));
-    document.getElementById("status").textContent =
-      "cache: " + ageStr + "  |  last fetch: " + last +
-      (j.fetch_in_progress ? "  |  refresh in progress..." : "");
-  } catch(e) { /* ignore */ }
-}
-function refreshImage() {
-  document.getElementById("shot").src = "/capture.png?t=" + Date.now();
-}
-async function pullFresh() {
-  const btn = document.getElementById("pullBtn");
-  btn.disabled = true;
-  btn.textContent = "Pulling from panel... (may take minutes)";
-  try {
-    await fetch("/refresh?wait=1", { cache: "no-store" });
-    refreshImage();
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Pull fresh from panel (blocks until done)";
-    updateStatus();
-  }
-}
-async function pullControls() {
-  const btn = document.getElementById("controlsBtn");
-  btn.disabled = true;
-  btn.textContent = "Waking controls...";
-  try {
-    document.getElementById("shot").src = "/controls.png?t=" + Date.now();
-    await new Promise(resolve => setTimeout(resolve, 2500));
-    updateStatus();
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Show controls + capture";
-  }
-}
-setInterval(updateStatus, 2000);
-updateStatus();
-</script>
-</body></html>""".encode("utf-8")
+const shot=document.getElementById('shot');
+function reloadCached(){shot.src='/capture.png?t='+Date.now()}
+const actionHeaders={'X-CrowPanel-Action':'1'};
+async function action(path){const r=await fetch(path,{method:'POST',headers:actionHeaders,cache:'no-store'});if(!r.ok)throw new Error(await r.text());reloadCached();await status()}
+async function controls(){const r=await fetch('/controls.png',{method:'POST',headers:actionHeaders,cache:'no-store'});if(!r.ok)throw new Error(await r.text());const u=URL.createObjectURL(await r.blob());shot.onload=()=>URL.revokeObjectURL(u);shot.src=u;await status()}
+async function status(){try{const r=await fetch('/health',{cache:'no-store'});const j=await r.json();document.getElementById('status').textContent=JSON.stringify(j)}catch(e){document.getElementById('status').textContent=e.message}}
+setInterval(status,5000);status();
+</script></body></html>""".encode("utf-8")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version = "CrowPanelRelay/1.1"
+    server_version = "CrowPanelRelay/2.0"
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(REQUEST_TIMEOUT_SEC)
 
     def log_message(self, fmt: str, *args) -> None:
-        sys.stderr.write(f"[{datetime.now().strftime('%H:%M:%S')}] {self.address_string()} {fmt % args}\n")
+        sys.stderr.write(f"[{datetime.now().strftime('%H:%M:%S')}] {self.client_address[0]} {fmt % args}\n")
+
+    def _authorized(self) -> bool:
+        if not RELAY_TOKEN:
+            return True
+        value = self.headers.get("Authorization", "")
+        supplied = ""
+        if value.startswith("Bearer "):
+            supplied = value[7:]
+        elif value.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(value[6:], validate=True).decode("utf-8")
+                supplied = decoded.partition(":")[2]
+            except (ValueError, UnicodeDecodeError):
+                supplied = ""
+        if supplied and hmac.compare_digest(supplied, RELAY_TOKEN):
+            return True
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="CrowPanel relay"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return False
+
+    def _action_request_allowed(self) -> bool:
+        """Block form-based CSRF even when a browser cached Basic auth."""
+        if not hmac.compare_digest(self.headers.get("X-CrowPanel-Action", ""), "1"):
+            self._send(403, b"missing action confirmation header\n")
+            return False
+        if self.headers.get("Sec-Fetch-Site", "").lower() == "cross-site":
+            self._send(403, b"cross-site action rejected\n")
+            return False
+        return True
 
     def _send(self, code: int, body: bytes, ctype: str = "text/plain; charset=utf-8") -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        origin = self.headers.get("Origin", "")
+        if CORS_ALLOW_ORIGIN and origin == CORS_ALLOW_ORIGIN:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except OSError:
             pass
 
-    def _parse_query(self) -> dict[str, str]:
-        if "?" not in self.path:
-            return {}
-        _, qs = self.path.split("?", 1)
-        out: dict[str, str] = {}
-        for pair in qs.split("&"):
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                out[k] = v
-            elif pair:
-                out[pair] = "1"
-        return out
+    def _rate_limit_action(self, path: str) -> bool:
+        if ACTION_MIN_INTERVAL_SEC <= 0:
+            return True
+        key = (self.client_address[0], path)
+        now = time.monotonic()
+        with _action_lock:
+            last = _last_action_by_client.get(key, 0.0)
+            if now - last < ACTION_MIN_INTERVAL_SEC:
+                retry = max(1, int(ACTION_MIN_INTERVAL_SEC - (now - last) + 0.999))
+                self.send_response(429)
+                self.send_header("Retry-After", str(retry))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return False
+            # Keep malicious rotating clients from growing this forever. Paths
+            # are validated before this function, and the hard cap applies even
+            # when every entry is recent.
+            if key not in _last_action_by_client and len(_last_action_by_client) >= 1024:
+                cutoff = now - max(ACTION_MIN_INTERVAL_SEC * 2, 60)
+                stale = [k for k, value in _last_action_by_client.items() if value < cutoff]
+                for old_key in stale:
+                    _last_action_by_client.pop(old_key, None)
+                while len(_last_action_by_client) >= 1024:
+                    oldest = min(_last_action_by_client, key=_last_action_by_client.get)
+                    _last_action_by_client.pop(oldest, None)
+            _last_action_by_client[key] = now
+        return True
 
-    def do_GET(self) -> None:  # noqa: N802
-        path = self.path.split("?", 1)[0]
-        qs = self._parse_query()
+    def _health(self) -> None:
+        with _lock:
+            age = time.time() - _cache_fetched_at if _cache_fetched_at else None
+            status = {
+                "relay": "ok",
+                "pillow_available": _HAVE_PIL,
+                "cache_bytes_bmp": len(_cache_bmp),
+                "cache_bytes_png": len(_cache_png),
+                "cache_age_sec": age,
+                "cache_fetched_at": datetime.fromtimestamp(_cache_fetched_at, tz=timezone.utc).isoformat() if _cache_fetched_at else None,
+                "last_attempt_at": datetime.fromtimestamp(_last_attempt_at, tz=timezone.utc).isoformat() if _last_attempt_at else None,
+                "last_attempt_ok": _last_attempt_ok,
+                "last_attempt_bytes": _last_attempt_bytes,
+                "last_attempt_duration_sec": _last_attempt_duration,
+                "last_attempt_error": _last_attempt_error,
+                "fetch_in_progress": _fetch_is_active(),
+                "auto_refresh_sec": AUTO_REFRESH_SEC,
+                "now": datetime.now(timezone.utc).isoformat(),
+            }
+        self._send(200, json.dumps(status, indent=2).encode(), "application/json")
 
-        if path in ("/", "/index.html"):
-            self._send(200, _INDEX_HTML, "text/html; charset=utf-8")
+    def _cached(self, png: bool) -> None:
+        with _lock:
+            use_png = png and _HAVE_PIL and bool(_cache_png)
+            body = _cache_png if use_png else _cache_bmp
+        if not body:
+            self._send(503, b"relay: no cached capture yet\n")
             return
+        self._send(200, body, "image/png" if use_png else "image/bmp")
 
-        if path == "/capture.bmp":
-            with _lock:
-                body = _cache_bmp
-            if not body:
-                self._send(503, b"relay: no cached capture yet (still warming up)\n")
-                return
-            self._send(200, body, "image/bmp")
+    def _action(self, path: str, wait: bool) -> None:
+        if path not in _ACTION_PATHS:
+            self._send(404, b"not found\n")
             return
-
-        if path == "/capture.png":
-            with _lock:
-                body = _cache_png if _HAVE_PIL else _cache_bmp
-                ctype = "image/png" if _HAVE_PIL else "image/bmp"
-            if not body:
-                self._send(503, b"relay: no cached capture yet (still warming up)\n")
-                return
-            self._send(200, body, ctype)
+        if not self._rate_limit_action(path):
             return
-
+        if path == "/refresh":
+            if wait:
+                ok, msg = _fetch_from_panel()
+                self._send(200 if ok else 502, (msg + "\n").encode())
+            else:
+                threading.Thread(target=_fetch_from_panel, daemon=True).start()
+                self._send(202, b"refresh triggered\n")
+            return
         if path in ("/wake-controls", "/controls.bmp", "/controls.png"):
             ok, msg = _wake_panel_controls()
             if not ok:
@@ -314,76 +417,101 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if path == "/wake-controls":
                 self._send(200, (msg + "\n").encode())
                 return
-
             time.sleep(0.75)
             ok, msg = _fetch_from_panel()
             if not ok:
                 self._send(502, ("panel fetch failed: " + msg + "\n").encode())
                 return
-            with _lock:
-                body = _cache_png if path == "/controls.png" and _HAVE_PIL else _cache_bmp
-                ctype = "image/png" if path == "/controls.png" and _HAVE_PIL else "image/bmp"
-            if not body:
-                self._send(503, b"relay: controls capture produced no image\n")
+            self._cached(path.endswith(".png"))
+            return
+
+    def do_GET(self) -> None:  # noqa: N802
+        if not self._authorized():
+            return
+        path, _, query = self.path.partition("?")
+        if path in ("/", "/index.html"):
+            self._send(200, _INDEX_HTML, "text/html; charset=utf-8")
+        elif path == "/capture.bmp":
+            self._cached(False)
+        elif path == "/capture.png":
+            self._cached(True)
+        elif path == "/health":
+            self._health()
+        elif path in ("/refresh", "/wake-controls", "/controls.bmp", "/controls.png"):
+            if not ALLOW_LEGACY_GET_ACTIONS:
+                self.send_response(405)
+                self.send_header("Allow", "POST")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
                 return
-            self._send(200, body, ctype)
+            self._action(path, "wait=1" in query)
+        else:
+            self._send(404, b"not found\n")
+
+    def do_POST(self) -> None:  # noqa: N802
+        if not self._authorized():
             return
-
-        if path == "/refresh":
-            if qs.get("wait") in ("1", "true", "yes"):
-                ok, msg = _fetch_from_panel()
-                self._send(200 if ok else 502, (msg + "\n").encode())
-            else:
-                threading.Thread(target=_fetch_from_panel, daemon=True).start()
-                self._send(202, b"refresh triggered (async)\n")
+        if not self._action_request_allowed():
             return
-
-        if path == "/health":
-            with _lock:
-                now = time.time()
-                age = (now - _cache_fetched_at) if _cache_fetched_at else None
-                status: dict[str, object] = {
-                    "relay": "ok",
-                    "panel": f"http://{PANEL_HOST}:{PANEL_PORT}",
-                    "pillow_available": _HAVE_PIL,
-                    "cache_bytes_bmp": len(_cache_bmp),
-                    "cache_bytes_png": len(_cache_png),
-                    "cache_age_sec": age,
-                    "cache_fetched_at": (datetime.fromtimestamp(_cache_fetched_at, tz=timezone.utc).isoformat()
-                                         if _cache_fetched_at else None),
-                    "last_attempt_at": (datetime.fromtimestamp(_last_attempt_at, tz=timezone.utc).isoformat()
-                                        if _last_attempt_at else None),
-                    "last_attempt_ok": _last_attempt_ok,
-                    "last_attempt_bytes": _last_attempt_bytes,
-                    "last_attempt_duration_sec": _last_attempt_duration,
-                    "last_attempt_error": _last_attempt_error,
-                    "fetch_in_progress": _fetch_in_progress.is_set(),
-                    "auto_refresh_sec": AUTO_REFRESH_SEC,
-                    "fetch_timeout_sec": FETCH_TIMEOUT,
-                    "now": datetime.now(timezone.utc).isoformat(),
-                }
-            self._send(200, json.dumps(status, indent=2).encode(), "application/json")
+        path, _, query = self.path.partition("?")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send(400, b"invalid Content-Length\n")
             return
+        if length < 0 or length > MAX_ACTION_BODY_BYTES:
+            self._send(413, b"request body too large\n")
+            return
+        if length:
+            try:
+                body = self.rfile.read(length)
+            except (TimeoutError, OSError):
+                self._send(408, b"request body timed out\n")
+                return
+            if len(body) != length:
+                self._send(400, b"incomplete request body\n")
+                return
+        self._action(path, "wait=1" in query)
 
-        self._send(404, b"not found\n")
 
-
-class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+class BoundedThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 16
+
+    def __init__(self, server_address, handler):
+        self._slots = threading.BoundedSemaphore(MAX_SERVER_THREADS)
+        super().__init__(server_address, handler)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.sendall(b"HTTP/1.1 503 Busy\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+            finally:
+                self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+
+def _is_loopback(host: str) -> bool:
+    return host in {"127.0.0.1", "::1", "localhost"}
 
 
 def main() -> int:
-    server = ThreadedHTTPServer((BIND_HOST, BIND_PORT), Handler)
-    print(f"[relay] panel         = http://{PANEL_HOST}:{PANEL_PORT}")
-    print(f"[relay] listen        = http://{BIND_HOST}:{BIND_PORT}")
-    print(f"[relay] pillow        = {_HAVE_PIL}")
-    print(f"[relay] auto_refresh  = every {AUTO_REFRESH_SEC:.0f}s")
-    print(f"[relay] fetch_timeout = {FETCH_TIMEOUT:.0f}s")
-
-    bg = threading.Thread(target=_background_refresher, daemon=True)
-    bg.start()
-
+    if not _is_loopback(BIND_HOST) and not RELAY_TOKEN and not ALLOW_UNAUTHENTICATED:
+        raise SystemExit("Refusing non-loopback bind without RELAY_TOKEN; set ALLOW_UNAUTHENTICATED=1 only on a trusted isolated network")
+    server = BoundedThreadingHTTPServer((BIND_HOST, BIND_PORT), Handler)
+    print(f"[relay] panel = http://{PANEL_HOST}:{PANEL_PORT}")
+    print(f"[relay] listen = http://{BIND_HOST}:{BIND_PORT}")
+    print(f"[relay] auth = {'enabled' if RELAY_TOKEN else 'loopback/explicit opt-out'}")
+    print(f"[relay] limits = {MAX_SERVER_THREADS} clients, {MAX_CAPTURE_BYTES} capture bytes")
+    threading.Thread(target=_background_refresher, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

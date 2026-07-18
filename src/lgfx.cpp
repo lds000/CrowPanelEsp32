@@ -14,9 +14,22 @@
 #include "touch.h"
 #include "app_state.h"
 #include <esp_heap_caps.h>
+#include <freertos/semphr.h>
 
 LGFX lcd;
 volatile uint32_t g_last_touch_ms = 0;
+static SemaphoreHandle_t g_framebuffer_mutex = nullptr;
+
+bool framebuffer_lock(uint32_t timeout_ms) {
+    if (!g_framebuffer_mutex) return true;
+    const TickType_t wait_ticks = timeout_ms == UINT32_MAX
+                                ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    return xSemaphoreTake(g_framebuffer_mutex, wait_ticks) == pdTRUE;
+}
+
+void framebuffer_unlock() {
+    if (g_framebuffer_mutex) xSemaphoreGive(g_framebuffer_mutex);
+}
 
 /* Touch driver globals — defined here, declared extern in touch.h */
 TAMC_GT911 ts(TOUCH_GT911_SDA, TOUCH_GT911_SCL,
@@ -29,7 +42,14 @@ int touch_last_y = 0;
 static void disp_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p) {
     uint32_t w = area->x2 - area->x1 + 1;
     uint32_t h = area->y2 - area->y1 + 1;
-    lcd.pushImageDMA(area->x1, area->y1, w, h, reinterpret_cast<lgfx::rgb565_t *>(&color_p->full));
+    if (framebuffer_lock(UINT32_MAX)) {
+        lcd.pushImageDMA(area->x1, area->y1, w, h,
+                         reinterpret_cast<lgfx::rgb565_t *>(&color_p->full));
+        /* LVGL owns the draw buffer and may reuse it as soon as flush_ready is
+           called. Wait for LovyanGFX to finish consuming that buffer first. */
+        lcd.waitDMA();
+        framebuffer_unlock();
+    }
     lv_disp_flush_ready(drv);
 }
 
@@ -47,7 +67,6 @@ static void touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     } else {
         data->state = LV_INDEV_STATE_REL;
     }
-    delay(5);
 }
 
 /* ── LGFX constructor: configure the RGB bus + panel ──────── */
@@ -127,6 +146,7 @@ void LGFX::setup() {
     /* Initialise the physical display */
     this->begin();
     this->fillScreen(TFT_BLACK);
+    g_framebuffer_mutex = xSemaphoreCreateMutex();
     _screen_width  = this->width();   /* 800 */
     _screen_height = this->height();  /* 480 */
 

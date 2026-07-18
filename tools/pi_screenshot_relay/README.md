@@ -1,76 +1,101 @@
-# CrowPanel Screenshot Relay (hub Pi side)
+# CrowPanel screenshot relay
 
-A small Python HTTP proxy that exposes the CrowPanel's on-device
-`/capture.bmp` endpoint via the hub Pi's Tailscale IP, so remote
-tailnet members can fetch live screenshots without relying on
-Tailscale's subnet-routing (which has been flaky from some hosts).
+The relay keeps one validated CrowPanel capture in memory and serves that cache
+without making every viewer wait for the panel's slow Wi-Fi transfer. Concurrent
+refreshes join one fetch and receive its actual success or failure.
 
-```
-┌──────────────┐  Tailscale  ┌──────────┐   LAN   ┌───────────┐
-│ Remote PC    │────100.x───▶│ Hub Pi   │────────▶│ CrowPanel │
-│ (anywhere)   │             │ 9108     │ :8080   │ .107      │
-└──────────────┘             └──────────┘         └───────────┘
-```
+## Security defaults
 
-## Endpoints (once deployed)
+- Listens on `127.0.0.1`, not every interface.
+- Refuses a non-loopback bind unless `RELAY_TOKEN` is set.
+- Requires authentication on every route when a token is configured.
+- Uses POST for refresh and wake actions. Legacy mutating GET routes return 405.
+- POST actions require `X-CrowPanel-Action: 1`, preventing cross-site forms
+  from reusing a browser's cached Basic credentials.
+- Validates BMP type, dimensions and size before replacing the cache.
+- Bounds concurrent clients, request bodies and action frequency.
+- Does not enable CORS unless one exact `CORS_ALLOW_ORIGIN` is configured.
 
-- `http://<hub-pi>:9108/` — HTML preview with auto-refresh
-- `http://<hub-pi>:9108/capture.bmp` — raw BMP passthrough
-- `http://<hub-pi>:9108/capture.png` — PNG-converted (smaller, browser-native)
-- `http://<hub-pi>:9108/wake-controls` — ask the panel to show its controls bar
-- `http://<hub-pi>:9108/controls.png` — wake controls, fetch fresh capture, return PNG
-- `http://<hub-pi>:9108/controls.bmp` — wake controls, fetch fresh capture, return BMP
-- `http://<hub-pi>:9108/health` — JSON relay + panel status
+The relay accepts `Authorization: Bearer <token>`. It also accepts HTTP Basic
+with any username and the token as the password, allowing a browser to show its
+normal login prompt. These controls protect access but do not encrypt HTTP; use
+Tailscale, a private VLAN, or an HTTPS reverse proxy.
 
-From the remote PC, use the hub Pi's Tailscale IP (`100.116.147.6`):
+## Endpoints
 
-```powershell
-curl -o capture.png http://100.116.147.6:9108/capture.png
-start capture.png
-curl -o controls.png http://100.116.147.6:9108/controls.png
-```
+Read-only:
 
-Or open `http://100.116.147.6:9108/` in a browser with auto-refresh on.
+- `GET /` - preview
+- `GET /capture.bmp` and `GET /capture.png` - cached image
+- `GET /health` - cache/fetch status
 
-## Deploy to the Pi
+Actions:
 
-From this repo root, with SSH access to `lds00@192.168.68.88`:
+- `POST /refresh` - start a refresh
+- `POST /refresh?wait=1` - refresh and return the real result
+- `POST /wake-controls` - reveal the panel controls
+- `POST /controls.bmp` and `POST /controls.png` - wake, refresh and return
+
+For a temporary migration only, `ALLOW_LEGACY_GET_ACTIONS=1` restores the old
+GET actions. Do not leave that enabled; crawlers are remarkably gifted at
+pressing buttons nobody invited them to press.
+
+## Install on the hub
+
+Install the script read-only and create a root-owned private environment file:
 
 ```bash
-# Copy relay + systemd unit
-ssh lds00@192.168.68.88 'mkdir -p ~/crowpanel-relay'
-scp tools/pi_screenshot_relay/relay.py lds00@192.168.68.88:~/crowpanel-relay/
-scp tools/pi_screenshot_relay/crowpanel-relay.service lds00@192.168.68.88:/tmp/
-
-# Install (one-time)
-ssh lds00@192.168.68.88 '
-  sudo apt install -y python3-pil &&
-  sudo cp /tmp/crowpanel-relay.service /etc/systemd/system/ &&
-  sudo systemctl daemon-reload &&
-  sudo systemctl enable --now crowpanel-relay &&
-  sudo systemctl status crowpanel-relay --no-pager
-'
+sudo install -d -m 0755 /opt/crowpanel-relay
+sudo install -m 0755 tools/pi_screenshot_relay/relay.py /opt/crowpanel-relay/relay.py
+sudo install -m 0644 tools/pi_screenshot_relay/crowpanel-relay.service /etc/systemd/system/
+sudo sh -c 'umask 077; : > /etc/crowpanel-relay.env'
+sudoedit /etc/crowpanel-relay.env
 ```
 
-## Operational
+Example `/etc/crowpanel-relay.env` (replace every placeholder locally):
 
-Check health:
+```ini
+PANEL_HOST=panel.lan
+PANEL_PORT=8080
+PANEL_AUTH_USER=crowpanel
+PANEL_AUTH_TOKEN=replace-with-device-diagnostics-token
+BIND_HOST=100.x.y.z
+BIND_PORT=9108
+RELAY_TOKEN=replace-with-a-different-random-token
+AUTO_REFRESH_SEC=120
+```
+
+Generate tokens locally with a password manager or `openssl rand -hex 32`.
+Never commit the resulting file. The panel token must match its private
+`SCREENSHOT_HTTP_AUTH_TOKEN` setting.
+
 ```bash
-curl http://192.168.68.88:9108/health
+sudo systemctl daemon-reload
+sudo systemctl enable --now crowpanel-relay
+sudo systemctl status crowpanel-relay --no-pager
 ```
 
-Logs:
+## Use
+
 ```bash
-ssh lds00@192.168.68.88 'journalctl -u crowpanel-relay -n 50 --no-pager'
+curl -H "Authorization: Bearer $RELAY_TOKEN" http://100.x.y.z:9108/health
+curl -H "Authorization: Bearer $RELAY_TOKEN" -o capture.png http://100.x.y.z:9108/capture.png
+curl -H "Authorization: Bearer $RELAY_TOKEN" -H "X-CrowPanel-Action: 1" -X POST 'http://100.x.y.z:9108/refresh?wait=1'
 ```
 
-Restart after panel firmware change:
-```bash
-ssh lds00@192.168.68.88 'sudo systemctl restart crowpanel-relay'
-```
+Open the same address in a browser and enter any username plus the relay token
+as the password. Keep tokens out of shell history when possible.
 
-## Prerequisite
+## Important variables
 
-The CrowPanel firmware must have `ENABLE_SCREENSHOT_HTTP 1` at build
-time (it is, since commit `8c19648`). The relay will return HTTP 502
-with "panel fetch failed" until the new firmware is flashed.
+| Variable | Default | Purpose |
+|---|---:|---|
+| `MAX_CAPTURE_BYTES` | 2000000 | Maximum panel response |
+| `MAX_SERVER_THREADS` | 8 | Concurrent client cap |
+| `ACTION_MIN_INTERVAL_SEC` | 2 | Per-client action rate limit |
+| `REQUEST_TIMEOUT_SEC` | 15 | Socket/header/body timeout |
+| `FETCH_TIMEOUT` | 420 | Slow panel fetch timeout |
+| `EXPECTED_WIDTH` / `EXPECTED_HEIGHT` | 800 / 480 | Capture validation |
+| `CORS_ALLOW_ORIGIN` | unset | One exact allowed origin |
+
+Logs are available with `journalctl -u crowpanel-relay`.

@@ -20,6 +20,36 @@ void ui_return_to_dash();
 static lv_obj_t *g_hist_scr  = nullptr;
 static lv_obj_t *g_hist_list = nullptr;   /* lv_list or scroll container */
 static lv_obj_t *g_loading_lbl;
+static uint32_t g_last_history_signature = 0;
+static bool g_history_signature_valid = false;
+
+static uint32_t history_signature() {
+    const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&g_state.history);
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < sizeof(g_state.history); ++i) {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    hash ^= g_state.data_loading ? 1u : 0u;
+    return hash * 16777619u;
+}
+
+static void update_freshness_label() {
+    if (!g_loading_lbl) return;
+    if (g_state.data_loading) {
+        lv_label_set_text(g_loading_lbl, "LOADING...");
+        lv_obj_set_style_text_color(g_loading_lbl, lv_color_hex(C_ORANGE), 0);
+    } else if (!g_state.history.valid || g_state.history.updated_ms == 0) {
+        lv_label_set_text(g_loading_lbl, "HISTORY UNAVAILABLE");
+        lv_obj_set_style_text_color(g_loading_lbl, lv_color_hex(C_DANGER), 0);
+    } else {
+        char text[32];
+        uint32_t age = (uint32_t)(millis() - g_state.history.updated_ms) / 1000UL;
+        snprintf(text, sizeof(text), "UPDATED %lus AGO", (unsigned long)age);
+        lv_label_set_text(g_loading_lbl, text);
+        lv_obj_set_style_text_color(g_loading_lbl, lv_color_hex(C_MUTED), 0);
+    }
+}
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -46,6 +76,7 @@ static void fmt_duration(int sec, char *out, size_t n) {
 
 static void rebuild_list() {
     if (!g_hist_list) return;
+    int32_t scroll_y = lv_obj_get_scroll_y(g_hist_list);
     lv_obj_clean(g_hist_list);
 
     if (!g_state.history.valid || g_state.history.count == 0) {
@@ -55,6 +86,8 @@ static void rebuild_list() {
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(C_MUTED), 0);
         lv_obj_set_width(lbl, 700);
+        g_last_history_signature = history_signature();
+        g_history_signature_valid = true;
         return;
     }
 
@@ -117,6 +150,10 @@ static void rebuild_list() {
             lv_obj_align(nc, LV_ALIGN_RIGHT_MID, -64, 0);
         }
     }
+    lv_obj_update_layout(g_hist_list);
+    lv_obj_scroll_to_y(g_hist_list, scroll_y, LV_ANIM_OFF);
+    g_last_history_signature = history_signature();
+    g_history_signature_valid = true;
 }
 
 static void on_back_tap(lv_event_t * /*e*/) { ui_return_to_dash(); }
@@ -127,6 +164,8 @@ void ui_history_build() {
         lv_obj_del(g_hist_scr);
         g_hist_scr = nullptr;
     }
+    g_history_signature_valid = false;
+    g_loading_lbl = nullptr;
 
     g_hist_scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(g_hist_scr, lv_color_hex(C_IDLE_MASK), 0);
@@ -160,7 +199,14 @@ void ui_history_build() {
     /* Robot icon next to title */
     lv_obj_t *robot = lv_img_create(g_hist_scr);
     lv_img_set_src(robot, &img_robot_32);
-    lv_obj_align(robot, LV_ALIGN_TOP_MID, -140, 12);
+    lv_obj_align(robot, LV_ALIGN_TOP_MID, -210, 12);
+
+    g_loading_lbl = lv_label_create(g_hist_scr);
+    lv_obj_set_width(g_loading_lbl, 170);
+    lv_obj_set_style_text_align(g_loading_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_font(g_loading_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_pos(g_loading_lbl, 610, 22);
+    update_freshness_label();
 
     /* Column headers */
     const char *HDRS[] = {"ZONE", "DATE / TIME", "DURATION", "TYPE"};
@@ -203,5 +249,8 @@ void ui_history_build() {
 /* ── Refresh ─────────────────────────────────────────────── */
 void ui_history_refresh() {
     if (!g_hist_scr || lv_scr_act() != g_hist_scr) return;
-    rebuild_list();
+    uint32_t signature = history_signature();
+    if (!g_history_signature_valid || signature != g_last_history_signature)
+        rebuild_list();
+    update_freshness_label();
 }

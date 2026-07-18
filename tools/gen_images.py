@@ -176,7 +176,7 @@ preview.paste(logo, (lx, ly), logo)
 # "Boise State Edition" subtitle
 try:
     f16 = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 16)
-except:
+except OSError:
     f16 = ImageFont.load_default()
 dp.text((W//2, ly + logo.height + 14), "BOISE STATE EDITION",
         font=f16, fill=(241, 99, 34), anchor="mt")
@@ -204,7 +204,7 @@ dash.paste(title, (72, 10), title)
 try:
     f12 = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 12)
     f14 = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 14)
-except:
+except OSError:
     f12 = f14 = ImageFont.load_default()
 
 dd.text((74, 66), "BOISE STATE EDITION", font=f12, fill=(241, 99, 34))

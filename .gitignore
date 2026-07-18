@@ -1,5 +1,12 @@
 # PlatformIO build artifacts
 .pio/
+.piohome/
+.piohome_reuse/
+.piohome-next/
+.pio-build-next/
+.pio-build-live-ci/
+.pio-review-ui-final/
+.pio-review-ui-live/
 
 # Python cache
 __pycache__/
@@ -13,6 +20,12 @@ Thumbs.db
 .vscode/
 *.swp
 
+# Per-device credentials and private build configuration
+include/config_private.h
+
 # Pulled from device (see tools/fetch_screenshot.py)
 tools/device_capture.bmp
+tools/device_capture*.png
+tools/device_controls*.png
+tools/device_idle*.png
 tools/review_sessions/
