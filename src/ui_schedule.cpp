@@ -11,11 +11,10 @@
 
 #include "app_state.h"
 #include "config.h"
+#include "ui.h"
 #include "ui_theme.h"
+#include "zones.h"
 #include "lawnbot_images.h"
-
-/* Forward from ui.cpp */
-void ui_return_to_dash();
 
 /* ── Screen objects ─────────────────────────────────────── */
 static lv_obj_t *g_sched_scr = nullptr;
@@ -89,10 +88,10 @@ static void refresh_slots_panel() {
         /* Time row */
         lv_obj_t *time_lbl = lv_label_create(g_slots_cont);
         char time_buf[32];
-        snprintf(time_buf, sizeof(time_buf), "%s %s",
+        snprintf(time_buf, sizeof(time_buf), "%s%s",
                  slot.enabled ? "" : "(disabled)  ",
                  slot.time_str);
-        lv_label_set_text(time_lbl, slot.time_str);
+        lv_label_set_text(time_lbl, time_buf);
         lv_obj_set_style_text_font(time_lbl, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(time_lbl, lv_color_hex(slot.enabled ? C_ORANGE : C_MUTED), 0);
         lv_obj_set_pos(time_lbl, 0, y);
@@ -129,9 +128,12 @@ static void on_day_tap(lv_event_t *e) {
     lv_label_set_text(g_status_lbl, "");
 }
 
+static bool g_save_in_flight = false;
+
 static void on_save_tap(lv_event_t * /*e*/) {
     lv_label_set_text(g_save_lbl, "SAVING...");
     lv_label_set_text(g_status_lbl, "");
+    g_save_in_flight = true;
     g_pending.type = PENDING_SAVE_SCHEDULE;
 }
 
@@ -146,6 +148,7 @@ void ui_schedule_build() {
         lv_obj_del(g_sched_scr);
         g_sched_scr = nullptr;
     }
+    g_save_in_flight = false;
 
     g_sched_scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(g_sched_scr, lv_color_hex(C_IDLE_MASK), 0);
@@ -277,11 +280,32 @@ void ui_schedule_build() {
 void ui_schedule_refresh() {
     if (!g_sched_scr || lv_scr_act() != g_sched_scr) return;
 
-    /* If save just completed, show feedback and hide SAVE button */
-    if (g_pending.type == PENDING_NONE && g_state.schedule.days_dirty == false) {
+    /* Save completion feedback */
+    if (g_save_in_flight && g_pending.type == PENDING_NONE) {
+        g_save_in_flight = false;
         lv_label_set_text(g_save_lbl, "SAVE");
-        /* Show "Saved!" momentarily */
+        if (!g_state.schedule.days_dirty) {
+            lv_obj_add_flag(g_save_btn, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(g_status_lbl, "Saved!");
+            lv_obj_set_style_text_color(g_status_lbl, lv_color_hex(C_SUCCESS), 0);
+        } else {
+            lv_label_set_text(g_status_lbl, "Save failed - try again");
+            lv_obj_set_style_text_color(g_status_lbl, lv_color_hex(C_DANGER), 0);
+        }
     }
 
-    refresh_slots_panel();
+    /* Rebuild widgets only when the underlying data actually changes
+     * (rebuilding every 500 ms churns the LVGL heap for no reason). */
+    static ScheduleData prev_sched;
+    static bool prev_loading = false;
+    static bool has_prev     = false;
+    if (!has_prev
+        || prev_loading != g_state.data_loading
+        || memcmp(&prev_sched, &g_state.schedule, sizeof(ScheduleData)) != 0) {
+        refresh_slots_panel();
+        for (int i = 0; i < SCHED_DAYS; i++) style_day_cell(g_day_cells[i], i);
+        prev_sched   = g_state.schedule;
+        prev_loading = g_state.data_loading;
+        has_prev     = true;
+    }
 }

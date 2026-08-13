@@ -11,7 +11,7 @@
 #include <time.h>
 
 #include "config.h"
-#include "ui_theme.h"   /* ZONE_API_NAMES, zone_url_path() */
+#include "zones.h"      /* ZONE_API_NAMES, zone_index(), zone_url_path() */
 
 #if APP_MODE == APP_MODE_LIVE
 #include <ArduinoJson.h>
@@ -30,13 +30,7 @@
 #include "ota_server.h"
 #endif
 #include "screenshot_serial.h"
-
-/* ── Forward declarations from UI files ──────────────────── */
-void ui_init();
-void ui_set_splash_text(const char *text);
-void ui_build_dashboard();
-void ui_update_timer_cb(lv_timer_t *t);
-void ui_show_toast(const char *text, uint32_t ms);
+#include "ui.h"
 
 /* ── Global state ─────────────────────────────────────────── */
 AppState      g_state   = {};
@@ -50,7 +44,6 @@ static const uint32_t CTRL_WAKE_MS = 8000;
 #if APP_MODE == APP_MODE_LIVE
 static WebSocketsClient ws;
 static uint32_t g_last_sensor_ms  = 0;
-static uint32_t g_last_hist_fetch = 0;
 #else
 /* ── Demo state ──────────────────────────────────────────── */
 static time_t   g_demo_epoch_base           = DEMO_START_EPOCH;
@@ -72,11 +65,18 @@ static void clear_relays() {
     g_state.relays.misters      = false;
 }
 
+static void set_relay_by_index(int idx, bool on) {
+    switch (idx) {
+        case 0: g_state.relays.hanging_pots = on; break;
+        case 1: g_state.relays.garden       = on; break;
+        case 2: g_state.relays.misters      = on; break;
+        default: break;
+    }
+}
+
 static void set_relay_for_zone(const char *zone) {
     clear_relays();
-    if (strcmp(zone, "Hanging Pots") == 0) g_state.relays.hanging_pots = true;
-    if (strcmp(zone, "Garden")       == 0) g_state.relays.garden       = true;
-    if (strcmp(zone, "Misters")      == 0) g_state.relays.misters      = true;
+    set_relay_by_index(zone_index(zone), true);
 }
 
 static void format_clock_strings(time_t ep) {
@@ -119,13 +119,8 @@ static void parse_ws_status(const char *json, size_t len) {
     /* zone_states array */
     JsonArray zones = data["zone_states"];
     clear_relays();
-    for (JsonObject z : zones) {
-        const char *name = z["name"] | "";
-        bool on = z["relay_on"] | false;
-        if (strcmp(name, "Hanging Pots") == 0) g_state.relays.hanging_pots = on;
-        else if (strcmp(name, "Garden")  == 0) g_state.relays.garden = on;
-        else if (strcmp(name, "Misters") == 0) g_state.relays.misters = on;
-    }
+    for (JsonObject z : zones)
+        set_relay_by_index(zone_index(z["name"] | ""), z["relay_on"] | false);
 
     /* current_run */
     JsonVariant run = data["current_run"];
@@ -161,9 +156,10 @@ static void parse_schedule(const char *json) {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return;
 
-    const JsonObject &sched = doc.as<JsonObject>().containsKey("schedule_days")
-                              ? doc.as<JsonObject>()
-                              : doc["schedule"].as<JsonObject>();
+    JsonObject root  = doc.as<JsonObject>();
+    JsonObject sched = root["schedule_days"].is<JsonArray>()
+                       ? root
+                       : root["schedule"].as<JsonObject>();
 
     JsonArray days = sched["schedule_days"];
     if (!days.isNull()) {
@@ -417,9 +413,8 @@ static void start_demo_run(const char *zone, uint32_t dur_sec, bool manual) {
     g_state.current_run.is_manual     = manual;
     set_relay_for_zone(zone);
     g_demo_run_end_ms = demo_motion_ms(millis()) + dur_sec * 1000UL;
-    int idx = 0;
-    for (int i = 0; i < 3; i++) if (strcmp(zone, ZONE_API_NAMES[i]) == 0) { idx = i; break; }
-    g_demo_next_zone_idx = (idx + 1) % 3;
+    int idx = zone_index(zone);
+    g_demo_next_zone_idx = ((idx >= 0 ? idx : 0) + 1) % ZONE_COUNT;
 }
 
 static void update_demo_weather(uint32_t ms) {
@@ -464,12 +459,11 @@ static void seed_demo_history() {
     g_state.history.count = 0;
 
     /* Generate 10 fake history entries going back in time */
-    static const char *ZONES[3] = {"Hanging Pots", "Garden", "Misters"};
-    static const int   DURS[3]  = {600, 900, 300};
+    static const int DURS[ZONE_COUNT] = {600, 900, 300};
     time_t base = DEMO_START_EPOCH - 86400; /* yesterday */
     for (int i = 0; i < 10; i++) {
         HistEntry &e = g_state.history.entries[g_state.history.count++];
-        strlcpy(e.zone, ZONES[i % 3], sizeof(e.zone));
+        strlcpy(e.zone, ZONE_API_NAMES[i % ZONE_COUNT], sizeof(e.zone));
         time_t t = base - i * 86400 + 6 * 3600; /* 06:00 each day */
         struct tm ti = {};
         localtime_r(&t, &ti);
@@ -506,9 +500,8 @@ static void execute_demo_action() {
 
 static void update_demo_state() {
     uint32_t raw = millis();
-    g_state.controls_visible = (raw - g_last_touch_ms) < CTRL_WAKE_MS;
 
-    /* Pause tracking */
+    /* Pause tracking (controls_visible is maintained in loop()) */
     if (g_state.demo_pause_time && !g_demo_prev_pause_time)
         g_demo_time_paused_at_ms = raw;
     else if (!g_state.demo_pause_time && g_demo_prev_pause_time)

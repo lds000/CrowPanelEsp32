@@ -11,15 +11,14 @@
 
 #include "app_state.h"
 #include "config.h"
+#include "ui.h"
 #include "ui_theme.h"
+#include "zones.h"
 #include "lawnbot_images.h"
-
-void ui_return_to_dash();
 
 /* ── Screen objects ─────────────────────────────────────── */
 static lv_obj_t *g_hist_scr  = nullptr;
-static lv_obj_t *g_hist_list = nullptr;   /* lv_list or scroll container */
-static lv_obj_t *g_loading_lbl;
+static lv_obj_t *g_hist_list = nullptr;   /* scroll container for rows */
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
@@ -203,5 +202,18 @@ void ui_history_build() {
 /* ── Refresh ─────────────────────────────────────────────── */
 void ui_history_refresh() {
     if (!g_hist_scr || lv_scr_act() != g_hist_scr) return;
-    rebuild_list();
+
+    /* Rebuild rows only when the underlying data actually changes
+     * (rebuilding every 500 ms churns the LVGL heap for no reason). */
+    static HistData prev_hist;
+    static bool prev_loading = false;
+    static bool has_prev     = false;
+    if (!has_prev
+        || prev_loading != g_state.data_loading
+        || memcmp(&prev_hist, &g_state.history, sizeof(HistData)) != 0) {
+        rebuild_list();
+        prev_hist    = g_state.history;
+        prev_loading = g_state.data_loading;
+        has_prev     = true;
+    }
 }

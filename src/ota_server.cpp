@@ -19,9 +19,7 @@
 #include <WiFi.h>
 
 #include "ota_server.h"
-
-/* Defined in ui.cpp */
-extern void ui_show_toast(const char *text, uint32_t ms);
+#include "ui.h"
 
 static WebServer g_ota_http(OTA_HTTP_PORT);
 

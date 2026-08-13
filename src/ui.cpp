@@ -1,10 +1,10 @@
 /**
- * ui.cpp â€” Main dashboard: idle weather scene + active watering scene
+ * ui.cpp - Main dashboard: idle weather scene + active watering scene
  *
  * Navigation:
- *   Idle â†’ touch â†’ controls appear (zone chips, HISTORY, SCHEDULE buttons)
- *   Zone chip â†’ duration picker modal â†’ starts run
- *   HISTORY/SCHEDULE â†’ separate full screens (built in ui_history.cpp / ui_schedule.cpp)
+ *   Idle -> touch -> controls appear (zone chips, HISTORY, SCHEDULE buttons)
+ *   Zone chip -> duration picker modal -> starts run
+ *   HISTORY/SCHEDULE -> separate full screens (built in ui_history.cpp / ui_schedule.cpp)
  */
 
 #include <lvgl.h>
@@ -15,22 +15,17 @@
 
 #include "app_state.h"
 #include "config.h"
+#include "ui.h"
 #include "ui_theme.h"
+#include "zones.h"
 #include "lawnbot_images.h"
 
 /* Declared in lv_conf.h */
 extern const lv_font_t font_clock_120;
 
-/* Forward declarations to other UI screens */
-void ui_schedule_build();
-void ui_schedule_refresh();
-void ui_history_build();
-void ui_history_refresh();
-void ui_show_toast(const char *text, uint32_t ms);
-
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ============================================================
    ENUMS / HELPERS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+============================================================ */
 enum WeatherCondition {
     WEATHER_UNKNOWN, WEATHER_SUNNY, WEATHER_CLOUDY,
     WEATHER_RAINY,   WEATHER_WINDY, WEATHER_SNOW
@@ -141,9 +136,9 @@ static lv_obj_t *make_wind(lv_obj_t *p, int x, int y, int w) {
     return o;
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ============================================================
    GLOBAL OBJECTS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+============================================================ */
 lv_obj_t *g_dash_screen   = nullptr;
 lv_obj_t *g_splash_screen = nullptr;
 
@@ -152,6 +147,9 @@ static lv_obj_t *g_bg_layer, *g_celestial, *g_cloud1, *g_cloud2;
 static lv_obj_t *g_star1, *g_star2, *g_star3, *g_star4;
 static lv_obj_t *g_rain1, *g_rain2, *g_rain3, *g_rain4;
 static lv_obj_t *g_wind1, *g_wind2, *g_wind3, *g_bg_dim;
+
+/* Splash */
+static lv_obj_t *g_splash_status = nullptr;
 
 /* Header */
 static lv_obj_t *g_brand_img, *g_sub_lbl, *g_mode_lbl;
@@ -164,22 +162,12 @@ static lv_obj_t *g_idle_cond, *g_idle_meta, *g_idle_next;
 static lv_obj_t *g_act_grp, *g_act_zone, *g_act_count, *g_act_sub, *g_act_bar;
 
 /* Controls surface */
-static lv_obj_t *g_ctrl_grp, *g_hint_lbl, *g_stop_btn, *g_stop_lbl;
-static lv_obj_t *g_ctrl_title, *g_ctrl_sub, *g_ctrl_status, *g_manual_card, *g_nav_card, *g_danger_card;
+static lv_obj_t *g_ctrl_grp, *g_hint_lbl, *g_stop_btn;
+static lv_obj_t *g_ctrl_title, *g_ctrl_robot, *g_ctrl_sub;
+static lv_obj_t *g_ctrl_status, *g_ctrl_status_lbl;
+static lv_obj_t *g_manual_card, *g_nav_card, *g_danger_card;
 static lv_obj_t *g_hist_btn,  *g_sched_btn;
-struct ZoneChip { lv_obj_t *btn; lv_obj_t *lbl; };
-static ZoneChip g_chips[3];
-
-#define LB_BG       0x030712u
-#define LB_CARD     0x111827u
-#define LB_BORDER   0x1F2937u
-#define LB_TEXT     0xF9FAFBu
-#define LB_MUTED    0x9CA3AFu
-#define LB_GREEN    0x22C55Eu
-#define LB_GREEN_D  0x16A34Au
-#define LB_RED      0xEF4444u
-#define LB_RED_D    0xB91C1Cu
-#define LB_YELLOW   0xF59E0Bu
+static lv_obj_t *g_zone_btns[ZONE_COUNT];
 
 /* Toast */
 static lv_obj_t *g_toast = nullptr;
@@ -193,16 +181,21 @@ static int       g_picker_zone  = -1;
 static const int DURATIONS[]    = {1, 3, 5, 10, 15, 20};
 static lv_obj_t *g_dur_btns[6];
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ============================================================
    DURATION PICKER EVENTS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+============================================================ */
 static void on_duration(lv_event_t *e) {
     int min = (int)(intptr_t)lv_event_get_user_data(e);
-    if (g_picker_zone >= 0 && g_picker_zone < 3) {
-        strncpy(g_pending.zone_name, ZONE_API_NAMES[g_picker_zone],
-                sizeof(g_pending.zone_name) - 1);
+    if (g_picker_zone >= 0 && g_picker_zone < ZONE_COUNT) {
+        strlcpy(g_pending.zone_name, ZONE_API_NAMES[g_picker_zone],
+                sizeof(g_pending.zone_name));
         g_pending.run_minutes = min;
         g_pending.type        = PENDING_RUN_ZONE;
+
+        char msg[48];
+        snprintf(msg, sizeof(msg), "STARTING %s  -  %d MIN",
+                 ZONE_DISPLAY_NAMES[g_picker_zone], min);
+        ui_show_toast(msg, 3000);
     }
     set_hidden(g_picker_panel, true);
     g_picker_zone = -1;
@@ -222,16 +215,20 @@ static void show_duration_picker(int zone_idx) {
     lv_obj_move_foreground(g_picker_panel);
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ============================================================
    CONTROL CALLBACKS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
-static void on_stop(lv_event_t * /*e*/) { g_pending.type = PENDING_STOP_ALL; }
+============================================================ */
+static void on_stop(lv_event_t * /*e*/) {
+    g_pending.type = PENDING_STOP_ALL;
+    ui_show_toast("STOPPING ALL WATERING", 3000);
+}
 
 static void on_zone_chip(lv_event_t *e) {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx < 0 || idx > 2) return;
+    if (idx < 0 || idx >= ZONE_COUNT) return;
     if (g_state.current_run.active) {
         g_pending.type = PENDING_STOP_ALL;
+        ui_show_toast("STOPPING ALL WATERING", 3000);
         return;
     }
     show_duration_picker(idx);
@@ -249,9 +246,9 @@ static void on_schedule_btn(lv_event_t * /*e*/) {
     ui_schedule_build();
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ============================================================
    SCENE BUILDERS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+============================================================ */
 static void create_background(lv_obj_t *scr) {
     g_bg_layer = lv_obj_create(scr);
     lv_obj_set_size(g_bg_layer, SCREEN_W, SCREEN_H);
@@ -320,7 +317,7 @@ static void create_idle_group(lv_obj_t *scr) {
     lv_obj_set_pos(g_idle_grp, 0, 0);
     clear_chrome(g_idle_grp);
 
-    /* Big clock â€” baked 120pt Arial Bold bitmap font */
+    /* Big clock - baked 120pt Arial Bold bitmap font */
     g_idle_time = lv_label_create(g_idle_grp);
     lv_label_set_text(g_idle_time, "--:--");
     lv_obj_set_width(g_idle_time, 560);
@@ -427,9 +424,9 @@ static lv_obj_t *make_settings_card(lv_obj_t *parent, int x, int y, int w, int h
     lv_obj_t *card = lv_obj_create(parent);
     lv_obj_set_size(card, w, h);
     lv_obj_set_pos(card, x, y);
-    lv_obj_set_style_bg_color(card, lv_color_hex(LB_CARD), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(LB_BORDER), 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(C_PANEL), 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_80, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(C_PANEL_EDGE), 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_radius(card, 12, 0);
     lv_obj_set_style_pad_all(card, 0, 0);
@@ -438,14 +435,14 @@ static lv_obj_t *make_settings_card(lv_obj_t *parent, int x, int y, int w, int h
     lv_obj_t *ey = lv_label_create(card);
     lv_label_set_text(ey, eyebrow);
     lv_obj_set_style_text_font(ey, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(ey, lv_color_hex(LB_MUTED), 0);
+    lv_obj_set_style_text_color(ey, lv_color_hex(C_ORANGE), 0);
     lv_obj_set_style_text_letter_space(ey, 2, 0);
     lv_obj_set_pos(ey, 16, 14);
 
     lv_obj_t *ttl = lv_label_create(card);
     lv_label_set_text(ttl, title);
     lv_obj_set_style_text_font(ttl, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(ttl, lv_color_hex(LB_TEXT), 0);
+    lv_obj_set_style_text_color(ttl, lv_color_hex(C_TEXT), 0);
     lv_obj_set_pos(ttl, 16, 36);
     return card;
 }
@@ -457,9 +454,9 @@ static lv_obj_t *make_card_button(lv_obj_t *parent, int x, int y, int w, int h,
     lv_obj_set_pos(btn, x, y);
     lv_obj_set_style_bg_color(btn, lv_color_hex(bg), 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(btn, lv_color_hex(LB_BORDER), 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(C_PANEL_EDGE), 0);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_radius(btn, 10, 0);
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, text);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
@@ -472,80 +469,87 @@ static void create_controls_group(lv_obj_t *scr) {
     g_ctrl_grp = lv_obj_create(scr);
     lv_obj_set_size(g_ctrl_grp, SCREEN_W, SCREEN_H);
     lv_obj_set_pos(g_ctrl_grp, 0, 0);
-    lv_obj_set_style_bg_color(g_ctrl_grp, lv_color_hex(LB_BG), 0);
+    lv_obj_set_style_bg_color(g_ctrl_grp, lv_color_hex(C_IDLE_MASK), 0);
+    lv_obj_set_style_bg_grad_color(g_ctrl_grp, lv_color_hex(C_PANEL), 0);
+    lv_obj_set_style_bg_grad_dir(g_ctrl_grp, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(g_ctrl_grp, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_ctrl_grp, 0, 0);
     lv_obj_set_style_radius(g_ctrl_grp, 0, 0);
     lv_obj_set_style_pad_all(g_ctrl_grp, 0, 0);
     lv_obj_clear_flag(g_ctrl_grp, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Touch hint */
+    /* Touch hint (visible only while the controls surface is hidden) */
     g_hint_lbl = lv_label_create(g_ctrl_grp);
     lv_label_set_text(g_hint_lbl, "TOUCH SCREEN FOR CONTROLS");
     lv_obj_set_style_text_font(g_hint_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(g_hint_lbl, lv_color_hex(C_MUTED), 0);
     lv_obj_align(g_hint_lbl, LV_ALIGN_BOTTOM_MID, 0, -46);
 
-    g_ctrl_title = lv_label_create(g_ctrl_grp);
-    lv_label_set_text(g_ctrl_title, "Controls");
-    lv_obj_set_style_text_font(g_ctrl_title, &lv_font_montserrat_32, 0);
-    lv_obj_set_style_text_color(g_ctrl_title, lv_color_hex(LB_TEXT), 0);
-    lv_obj_set_pos(g_ctrl_title, 24, 20);
+    /* Header: robot + title, styled like the schedule/history screens */
+    g_ctrl_robot = lv_img_create(g_ctrl_grp);
+    lv_img_set_src(g_ctrl_robot, &img_robot_32);
+    lv_obj_set_pos(g_ctrl_robot, 24, 18);
 
+    g_ctrl_title = lv_label_create(g_ctrl_grp);
+    lv_label_set_text(g_ctrl_title, "CONTROLS");
+    lv_obj_set_style_text_font(g_ctrl_title, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(g_ctrl_title, lv_color_hex(C_TEXT), 0);
+    lv_obj_set_style_text_letter_space(g_ctrl_title, 2, 0);
+    lv_obj_set_pos(g_ctrl_title, 68, 20);
+
+    /* Status pill (text/colors driven by update_status_pill) */
     g_ctrl_status = lv_obj_create(g_ctrl_grp);
-    lv_obj_set_size(g_ctrl_status, 210, 34);
-    lv_obj_set_pos(g_ctrl_status, 566, 24);
-    lv_obj_set_style_bg_color(g_ctrl_status, lv_color_hex(0x052E16u), 0);
+    lv_obj_set_size(g_ctrl_status, 230, 34);
+    lv_obj_set_pos(g_ctrl_status, 546, 24);
     lv_obj_set_style_bg_opa(g_ctrl_status, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(g_ctrl_status, lv_color_hex(0x166534u), 0);
     lv_obj_set_style_border_width(g_ctrl_status, 1, 0);
     lv_obj_set_style_radius(g_ctrl_status, 17, 0);
     lv_obj_clear_flag(g_ctrl_status, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *status_lbl = lv_label_create(g_ctrl_status);
-    lv_label_set_text(status_lbl, "LIVE  |  HUB CONNECTED");
-    lv_obj_set_style_text_font(status_lbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(status_lbl, lv_color_hex(LB_GREEN), 0);
-    lv_obj_center(status_lbl);
+    g_ctrl_status_lbl = lv_label_create(g_ctrl_status);
+    lv_label_set_text(g_ctrl_status_lbl, "DEMO MODE");
+    lv_obj_set_style_text_font(g_ctrl_status_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_center(g_ctrl_status_lbl);
 
     g_ctrl_sub = lv_label_create(g_ctrl_grp);
     lv_label_set_text(g_ctrl_sub, "Manual watering and quick navigation");
     lv_obj_set_style_text_font(g_ctrl_sub, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(g_ctrl_sub, lv_color_hex(LB_MUTED), 0);
-    lv_obj_set_pos(g_ctrl_sub, 26, 56);
+    lv_obj_set_style_text_color(g_ctrl_sub, lv_color_hex(C_MUTED), 0);
+    lv_obj_set_pos(g_ctrl_sub, 70, 56);
 
     g_manual_card = make_settings_card(g_ctrl_grp, 20, 96, 760, 142,
                                        "MANUAL WATERING", "Zones");
     g_nav_card = make_settings_card(g_ctrl_grp, 20, 258, 370, 174,
-                                    "NAVIGATION", "Schedules & history");
+                                    "NAVIGATION", "Schedule & history");
     g_danger_card = make_settings_card(g_ctrl_grp, 410, 258, 370, 174,
                                        "SAFETY", "Emergency stop");
 
     /* Zone chips */
-    static const int CHIP_X[3] = {18, 260, 502};
-    for (int i = 0; i < 3; i++) {
-        g_chips[i].btn = make_card_button(g_manual_card, CHIP_X[i], 78, 220, 46,
-                                          LB_GREEN_D, LB_TEXT, ZONE_DISPLAY_NAMES[i]);
-        lv_obj_add_event_cb(g_chips[i].btn, on_zone_chip, LV_EVENT_CLICKED,
+    static const int CHIP_X[ZONE_COUNT] = {18, 260, 502};
+    for (int i = 0; i < ZONE_COUNT; i++) {
+        g_zone_btns[i] = make_card_button(g_manual_card, CHIP_X[i], 78, 220, 46,
+                                          C_SUCCESS_DARK, C_TEXT, ZONE_DISPLAY_NAMES[i]);
+        lv_obj_set_style_bg_color(g_zone_btns[i], lv_color_hex(C_SUCCESS), LV_STATE_PRESSED);
+        lv_obj_add_event_cb(g_zone_btns[i], on_zone_chip, LV_EVENT_CLICKED,
                             reinterpret_cast<void *>(static_cast<intptr_t>(i)));
-        g_chips[i].lbl = lv_obj_get_child(g_chips[i].btn, 0);
     }
 
     /* HISTORY nav button */
     g_hist_btn = make_card_button(g_nav_card, 18, 78, 156, 54,
-                                  0x0F172Au, LB_YELLOW, "HISTORY");
+                                  C_IDLE_MASK, C_ORANGE, "HISTORY");
+    lv_obj_set_style_bg_color(g_hist_btn, lv_color_hex(C_BLUE), LV_STATE_PRESSED);
     lv_obj_add_event_cb(g_hist_btn, on_history_btn, LV_EVENT_CLICKED, nullptr);
 
     /* SCHEDULE nav button */
     g_sched_btn = make_card_button(g_nav_card, 194, 78, 156, 54,
-                                   0x0F172Au, LB_YELLOW, "SCHEDULE");
+                                   C_IDLE_MASK, C_ORANGE, "SCHEDULE");
+    lv_obj_set_style_bg_color(g_sched_btn, lv_color_hex(C_BLUE), LV_STATE_PRESSED);
     lv_obj_add_event_cb(g_sched_btn, on_schedule_btn, LV_EVENT_CLICKED, nullptr);
 
     /* STOP ALL button */
     g_stop_btn = make_card_button(g_danger_card, 18, 78, 332, 54,
-                                  LB_RED_D, LB_TEXT, "STOP ALL WATERING");
-    lv_obj_set_style_bg_color(g_stop_btn, lv_color_hex(LB_RED), LV_STATE_PRESSED);
+                                  C_DANGER_DARK, C_TEXT, "STOP ALL WATERING");
+    lv_obj_set_style_bg_color(g_stop_btn, lv_color_hex(C_DANGER), LV_STATE_PRESSED);
     lv_obj_add_event_cb(g_stop_btn, on_stop, LV_EVENT_CLICKED, nullptr);
-    g_stop_lbl = lv_obj_get_child(g_stop_btn, 0);
 }
 
 static void create_toast(lv_obj_t *scr) {
@@ -570,7 +574,7 @@ static void create_toast(lv_obj_t *scr) {
     lv_obj_center(g_toast_lbl);
 }
 
-/* Duration picker modal â€” overlay panel, initially hidden */
+/* Duration picker modal - overlay panel, initially hidden */
 static void create_duration_picker(lv_obj_t *scr) {
     /* Semi-transparent backdrop */
     g_picker_panel = lv_obj_create(scr);
@@ -602,7 +606,7 @@ static void create_duration_picker(lv_obj_t *scr) {
     lv_obj_set_style_text_letter_space(g_picker_title, 2, 0);
     lv_obj_align(g_picker_title, LV_ALIGN_TOP_MID, 0, 18);
 
-    /* Duration buttons â€” 2 rows of 3 */
+    /* Duration buttons - 2 rows of 3 */
     static const int DX[6] = {24, 186, 348, 24, 186, 348};
     static const int DY[6] = {64, 64,  64, 140, 140, 140};
     for (int i = 0; i < 6; i++) {
@@ -640,9 +644,9 @@ static void create_duration_picker(lv_obj_t *scr) {
     lv_obj_center(cl);
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ============================================================
    UPDATERS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+============================================================ */
 static void update_background() {
     WeatherCondition cond = get_condition();
     bool night = is_night();
@@ -681,20 +685,29 @@ static void update_background() {
         g_state.current_run.active ? LV_OPA_60 : LV_OPA_20, 0);
 }
 
+/* Connection status shown in the header label and the controls pill */
+struct ConnStatus { const char *text; uint32_t fg; uint32_t bg; uint32_t edge; };
+
+static ConnStatus get_conn_status() {
+    if (g_state.demo_mode)
+        return {"DEMO MODE",              C_MUTED,   0x0B1B36u, C_PANEL_EDGE};
+    if (g_state.ws_connected)
+        return {"LIVE  |  HUB CONNECTED", 0x7EF082u, 0x052E16u, 0x166534u};
+    if (g_state.wifi_connected)
+        return {"LIVE  |  HUB SEARCHING", C_ORANGE,  0x2A1606u, 0x7C3A10u};
+    return {"LIVE  |  WIFI OFFLINE",      C_DANGER,  0x2A0808u, 0x7C2020u};
+}
+
 static void update_header() {
-    if (g_state.demo_mode) {
-        lv_label_set_text(g_mode_lbl, "DEMO MODE");
-        lv_obj_set_style_text_color(g_mode_lbl, lv_color_hex(C_MUTED), 0);
-    } else if (g_state.ws_connected) {
-        lv_label_set_text(g_mode_lbl, "LIVE  |  HUB CONNECTED");
-        lv_obj_set_style_text_color(g_mode_lbl, lv_color_hex(0x7EF082u), 0);
-    } else if (g_state.wifi_connected) {
-        lv_label_set_text(g_mode_lbl, "LIVE  |  HUB SEARCHING");
-        lv_obj_set_style_text_color(g_mode_lbl, lv_color_hex(C_ORANGE), 0);
-    } else {
-        lv_label_set_text(g_mode_lbl, "LIVE  |  WIFI OFFLINE");
-        lv_obj_set_style_text_color(g_mode_lbl, lv_color_hex(C_DANGER), 0);
-    }
+    ConnStatus st = get_conn_status();
+    lv_label_set_text(g_mode_lbl, st.text);
+    lv_obj_set_style_text_color(g_mode_lbl, lv_color_hex(st.fg), 0);
+
+    /* Keep the controls status pill in sync with the same state */
+    lv_label_set_text(g_ctrl_status_lbl, st.text);
+    lv_obj_set_style_text_color(g_ctrl_status_lbl, lv_color_hex(st.fg), 0);
+    lv_obj_set_style_bg_color(g_ctrl_status, lv_color_hex(st.bg), 0);
+    lv_obj_set_style_border_color(g_ctrl_status, lv_color_hex(st.edge), 0);
 }
 
 static void update_idle_group() {
@@ -756,7 +769,6 @@ static void update_controls() {
 
     /* Background panel */
     if (show) {
-        lv_obj_set_style_bg_color(g_ctrl_grp, lv_color_hex(LB_BG), 0);
         lv_obj_set_style_bg_opa(g_ctrl_grp, LV_OPA_COVER, 0);
     } else {
         lv_obj_set_style_bg_opa(g_ctrl_grp, LV_OPA_TRANSP, 0);
@@ -764,6 +776,7 @@ static void update_controls() {
 
     set_hidden(g_hint_lbl, show);
     set_hidden(g_ctrl_title, !show);
+    set_hidden(g_ctrl_robot, !show);
     set_hidden(g_ctrl_sub, !show);
     set_hidden(g_ctrl_status, !show);
     set_hidden(g_manual_card, !show);
@@ -774,13 +787,13 @@ static void update_controls() {
     set_hidden(g_stop_btn, !show);
     set_hidden(g_hist_btn,  !show);
     set_hidden(g_sched_btn, !show);
-    for (int i = 0; i < 3; i++)
-        set_hidden(g_chips[i].btn, !show || active);
+    for (int i = 0; i < ZONE_COUNT; i++)
+        set_hidden(g_zone_btns[i], !show || active);
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ============================================================
    PUBLIC API
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+============================================================ */
 void ui_show_splash() {
     g_splash_screen = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(g_splash_screen, lv_color_hex(0x06182Fu), 0);
@@ -799,16 +812,22 @@ void ui_show_splash() {
     lv_obj_set_style_text_font(sub, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(sub, lv_color_hex(C_ORANGE), 0);
     lv_obj_set_style_text_letter_space(sub, 3, 0);
-    lv_obj_align(sub, LV_ALIGN_BOTTOM_MID, 0, -28);
+    lv_obj_align(sub, LV_ALIGN_BOTTOM_MID, 0, -52);
+
+    /* Boot status line, below the subtitle (updated via ui_set_splash_text) */
+    g_splash_status = lv_label_create(g_splash_screen);
+    lv_label_set_text(g_splash_status, "");
+    lv_obj_set_style_text_font(g_splash_status, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(g_splash_status, lv_color_hex(C_MUTED), 0);
+    lv_obj_align(g_splash_status, LV_ALIGN_BOTTOM_MID, 0, -24);
 
     lv_scr_load(g_splash_screen);
 }
 
 void ui_set_splash_text(const char *text) {
-    if (!g_splash_screen) return;
-    /* child 0 = logo image, child 1 = subtitle label */
-    lv_obj_t *s = lv_obj_get_child(g_splash_screen, 1);
-    if (s) lv_label_set_text(s, text);
+    if (!g_splash_screen || !g_splash_status) return;
+    lv_label_set_text(g_splash_status, text);
+    lv_obj_align(g_splash_status, LV_ALIGN_BOTTOM_MID, 0, -24);
     lv_timer_handler();
 }
 
@@ -838,6 +857,9 @@ void ui_build_dashboard() {
     update_active_group();
     update_controls();
 
+    /* Splash is deleted by the auto_del flag of the load animation */
+    g_splash_screen = nullptr;
+    g_splash_status = nullptr;
     lv_scr_load_anim(g_dash_screen, LV_SCR_LOAD_ANIM_FADE_IN, 300, 60, true);
 }
 
